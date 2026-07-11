@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cámara S600
+GenericName=Cámara 4K
+Comment=Panel de control de la EMEET SmartCam S600
+Exec=AppRun
+Icon=camara-s600
+Categories=AudioVideo;Video;
+Terminal=false
+Keywords=camera;webcam;EMEET;S600;4K;

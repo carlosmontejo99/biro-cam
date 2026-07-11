@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=B.I.O.R. Cam
+GenericName=Cámara USB
+Comment=Panel de control de cámara USB (Webcam)
+Exec=biro-cam
+Icon=biro-cam
+StartupWMClass=biro-cam
+Categories=AudioVideo;Video;
+Terminal=false
+Keywords=camera;webcam;B.I.O.R.;4K;panel;

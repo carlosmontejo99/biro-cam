@@ -1,0 +1,18 @@
+#!/bin/bash
+# Lanzador del AppImage · B.I.O.R. Cam (panel Qt/PySide6).
+HERE="$(dirname "$(readlink -f "${0}")")"
+PREFIX="$HERE/usr"
+
+export PYTHONHOME="$PREFIX"
+export PYTHONDONTWRITEBYTECODE=1
+
+QTDIR="$PREFIX/lib/python3.12/site-packages/PySide6/Qt"
+if [ -d "$QTDIR" ]; then
+    export QT_PLUGIN_PATH="$QTDIR/plugins"
+    export QT_QPA_PLATFORM_PLUGIN_PATH="$QTDIR/plugins/platforms"
+    export LD_LIBRARY_PATH="$QTDIR/lib:${LD_LIBRARY_PATH:-}"
+fi
+
+export QT_QPA_PLATFORM=xcb
+
+exec "$PREFIX/bin/python3" "$PREFIX/share/biro-cam/camara_s600.py" "$@"

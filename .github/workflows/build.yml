@@ -1,0 +1,48 @@
+name: Build AppImage
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build AppImage (aarch64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y file wget squashfs-tools
+
+      - name: Install Miniforge / Conda
+        run: |
+          wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh
+          bash Miniforge3-Linux-aarch64.sh -b -p $HOME/miniforge3
+          echo "$HOME/miniforge3/bin" >> $GITHUB_PATH
+
+      - name: Create Conda environment
+        run: |
+          $HOME/miniforge3/bin/conda create -y -n biro-cam-build python=3.12
+          $HOME/miniforge3/envs/biro-cam-build/bin/pip install PySide6 opencv-python numpy
+          $HOME/miniforge3/bin/pip install conda-pack
+
+      - name: Download appimagetool
+        run: |
+          mkdir -p $HOME/.cache/the_curator
+          wget -O $HOME/.cache/the_curator/appimagetool-aarch64.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
+          chmod +x $HOME/.cache/the_curator/appimagetool-aarch64.AppImage
+
+      - name: Build AppImage
+        run: |
+          bash packaging/build_appimage.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Biro-Cam-aarch64.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

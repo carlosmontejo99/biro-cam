@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.biro.BiroCam</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>B.I.O.R. Cam</name>
+  <summary>Control panel and recorder for USB webcams on Orange Pi 5 Max</summary>
+  <description>
+    <p>
+      B.I.O.R. Cam is a lightweight control panel and video recorder designed for USB webcams (optimized for EMEET SmartCam S600) on Single Board Computers like the Orange Pi 5 Max (RK3588).
+    </p>
+    <p>
+      Standard Linux camera apps (like Cheese or GNOME Snapshot) often fail to capture high-resolution streams from webcams because they attempt to request uncompressed YUV raw streams, which saturate the USB bandwidth, or because their hardware-accelerated GStreamer pipelines trigger the Rockchip RK3588 RGA MMU bug on systems with more than 4GB of RAM, crashing the kernel.
+    </p>
+    <p>
+      This application solves these issues by forcing a clean software-decoded MJPEG preview stream through mpv (safely avoiding the RGA kernel bug), while enabling high-performance hardware-accelerated video recording (H.264/H.265 RKMPP) and multi-channel audio mixing in the background.
+    </p>
+  </description>
+  <launchable type="desktop-id">biro-cam.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/carlos/biro-cam/main/assets/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://github.com/carlos/biro-cam</url>
+  <provides>
+    <binary>Biro-Cam-aarch64.AppImage</binary>
+  </provides>
+</component>

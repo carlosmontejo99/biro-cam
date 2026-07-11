@@ -1,0 +1,14 @@
+# Build and packaging directories
+build/
+dist/
+backups/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Operating system files
+.DS_Store
+Thumbs.db

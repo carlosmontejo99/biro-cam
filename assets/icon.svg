@@ -1,0 +1,52 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0b1120"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"  stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <radialGradient id="lens" cx="42%" cy="38%" r="65%">
+      <stop offset="0%"  stop-color="#2b3b57"/>
+      <stop offset="55%" stop-color="#11203a"/>
+      <stop offset="100%" stop-color="#060b16"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#60a5fa" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.5"/>
+    </filter>
+  </defs>
+
+  <!-- Fondo redondeado -->
+  <rect x="8" y="8" width="240" height="240" rx="56" ry="56" fill="url(#bg)"/>
+  <rect x="8" y="8" width="240" height="240" rx="56" ry="56" fill="none" stroke="#243047" stroke-width="2"/>
+
+  <!-- Halo -->
+  <circle cx="128" cy="132" r="96" fill="url(#glow)"/>
+
+  <!-- Aro exterior de la lente -->
+  <circle cx="128" cy="132" r="78" fill="none" stroke="url(#ring)" stroke-width="9"/>
+  <circle cx="128" cy="132" r="70" fill="#0e1830"/>
+
+  <!-- Cuerpo de la lente -->
+  <circle cx="128" cy="132" r="58" fill="url(#lens)" stroke="#1b2640" stroke-width="3"/>
+  <circle cx="128" cy="132" r="40" fill="#060b16" stroke="#22304c" stroke-width="2"/>
+
+  <!-- Iris / reflejos -->
+  <circle cx="112" cy="116" r="13" fill="#ffffff" opacity="0.85" filter="url(#soft)"/>
+  <circle cx="146" cy="150" r="6"  fill="#60a5fa" opacity="0.8"/>
+
+  <!-- Indicador de grabación -->
+  <circle cx="196" cy="64" r="13" fill="#f87171"/>
+  <circle cx="196" cy="64" r="13" fill="none" stroke="#fca5a5" stroke-width="2"/>
+
+  <!-- Etiqueta 4K -->
+  <g font-family="Arial, sans-serif" font-weight="bold">
+    <text x="128" y="232" text-anchor="middle" font-size="30" fill="#e6edf6" letter-spacing="2">4K</text>
+  </g>
+</svg>

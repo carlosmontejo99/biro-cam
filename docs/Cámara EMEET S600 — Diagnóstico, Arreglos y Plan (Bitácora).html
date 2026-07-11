@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B.I.O.R. Cam · App Qt + Modo Seguridad · Bitácora completa</title>
+<meta name="description" content="Bitácora viva del proyecto B.I.O.R. Cam v2.5: panel de control de cámara USB, grabación robusta y modo seguridad por movimiento. Comenzó con la EMEET SmartCam S600 y un bug RGA >4GB.">
+<style>
+  /* ============================================================
+     TOKENS DE DISEÑO — ÚNICA fuente de color. Nada de #hex fuera de aquí.
+     ============================================================ */
+  :root {
+    --bg:            #f7f8fa;
+    --surface:       #ffffff;
+    --surface-alt:   #eef1f6;
+    --text:          #1a2230;
+    --text-muted:    #5b6675;
+    --border:        #d9dee7;
+    --accent:        #3b82f6;
+    --accent-soft:   #3b82f61a;
+    --success:       #10b981;
+    --success-soft:  #10b9811a;
+    --warning:       #d97706;
+    --warning-soft:  #d976061a;
+    --error:         #dc2626;
+    --error-soft:    #dc26261a;
+    --code-bg:       #0d1426;
+    --code-text:     #e6edf6;
+
+    --radius:        13px;
+    --radius-sm:     8px;
+    --shadow:        0 1px 2px rgba(15,23,42,.06), 0 8px 24px rgba(15,23,42,.06);
+    --shadow-sm:     0 1px 3px rgba(15,23,42,.08);
+    --font-body:     Arial, "Helvetica Neue", sans-serif;
+    --font-mono:     "JetBrains Mono", "DM Mono", "Cascadia Code", ui-monospace, monospace;
+    --maxw:          900px;
+  }
+  [data-theme="dark"] {
+    --bg:            #0b1120;
+    --surface:       #111827;
+    --surface-alt:   #1b2536;
+    --text:          #e6edf6;
+    --text-muted:    #94a3b8;
+    --border:        #243047;
+    --accent:        #60a5fa;
+    --accent-soft:   #60a5fa1f;
+    --success:       #34d399;
+    --success-soft:  #34d3991f;
+    --warning:       #fbbf24;
+    --warning-soft:  #fbbf241f;
+    --error:         #f87171;
+    --error-soft:    #f871711f;
+    --code-bg:       #060b16;
+    --code-text:     #e6edf6;
+    --shadow:        0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    --shadow-sm:     0 1px 3px rgba(0,0,0,.45);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--font-body);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    transition: background-color .35s, color .35s;
+  }
+
+  /* ---------- Layout ---------- */
+  header.site {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--surface) 86%, transparent);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar {
+    max-width: var(--maxw); margin: 0 auto;
+    display: flex; align-items: center; gap: 1rem;
+    padding: .7rem 1.25rem;
+  }
+  .brand { font-weight: bold; letter-spacing: .3px; }
+  .brand span { color: var(--accent); }
+  .bar .spacer { flex: 1; }
+  .theme-btn {
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); border-radius: 999px;
+    width: 40px; height: 40px; font-size: 1.1rem; cursor: pointer;
+    transition: transform .2s, border-color .2s;
+  }
+  .theme-btn:hover { transform: scale(1.08); border-color: var(--accent); }
+
+  /* ---------- Tabs ---------- */
+  nav.tabs {
+    max-width: var(--maxw); margin: 0 auto;
+    display: flex; gap: .25rem; padding: 0 1rem;
+    overflow-x: auto; scrollbar-width: thin;
+  }
+  nav.tabs button {
+    appearance: none; border: 0; background: transparent;
+    color: var(--text-muted); cursor: pointer;
+    font: inherit; font-size: .9rem; white-space: nowrap;
+    padding: .85rem .9rem; border-bottom: 2px solid transparent;
+    transition: color .2s, border-color .2s;
+  }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button[aria-selected="true"] {
+    color: var(--accent); border-bottom-color: var(--accent); font-weight: bold;
+  }
+
+  main { max-width: var(--maxw); margin: 0 auto; padding: 1.75rem 1.25rem 4rem; }
+
+  /* ---------- Panels + animación ---------- */
+  .panel { display: none; }
+  .panel.active { display: block; animation: fadeUp .4s ease both; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- Tipografía ---------- */
+  h1 { font-size: 2rem; margin: .2rem 0 .6rem; line-height: 1.2; }
+  h2 { font-size: 1.45rem; margin: 2.2rem 0 .8rem; padding-bottom: .4rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.15rem; margin: 1.6rem 0 .5rem; }
+  h4 { font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; color: var(--text-muted); margin: 1.2rem 0 .4rem; }
+  p { margin: .7rem 0; }
+  a { color: var(--accent); }
+  em { color: var(--accent); font-style: italic; }
+  ::selection { background: var(--accent-soft); }
+
+  .tags { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+  .tag { font-size: .78rem; padding: .25rem .7rem; border-radius: 999px;
+         background: var(--accent-soft); color: var(--accent); border: 1px solid var(--border); }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    background: linear-gradient(135deg, var(--accent-soft), transparent 70%);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.8rem; box-shadow: var(--shadow);
+  }
+
+  /* ---------- Tablas ---------- */
+  .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  caption { text-align: left; color: var(--text-muted); font-size: .85rem; padding: .6rem .8rem; }
+  th, td { padding: .65rem .85rem; text-align: left; border-bottom: 1px solid var(--border); }
+  thead th { background: var(--surface-alt); font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; }
+  tbody tr:hover { background: var(--surface-alt); }
+
+  /* ---------- Card grid ---------- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.1rem; box-shadow: var(--shadow-sm);
+    transition: transform .2s, border-color .2s;
+  }
+  .card:hover { transform: translateY(-3px); border-color: var(--accent); }
+  .card .ico { font-size: 1.5rem; }
+
+  /* ---------- Callouts (semánticos) ---------- */
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft);
+             padding: .9rem 1.1rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; margin: 1rem 0; }
+  .callout.ok   { border-color: var(--success); background: var(--success-soft); }
+  .callout.warn { border-color: var(--warning); background: var(--warning-soft); }
+  .callout.err  { border-color: var(--error);   background: var(--error-soft); }
+  .callout strong { display: block; margin-bottom: .25rem; }
+
+  /* ---------- ACR ---------- */
+  .acr { border-left: 4px solid var(--success); background: var(--surface);
+         border: 1px solid var(--border); border-left-width: 4px; border-left-color: var(--success);
+         border-radius: var(--radius); padding: 1.1rem 1.3rem; margin: 1.2rem 0; box-shadow: var(--shadow-sm); }
+  .acr h4 { color: var(--success); margin-top: 0; }
+
+  /* ---------- Collapsible ---------- */
+  details { border: 1px solid var(--border); border-radius: var(--radius-sm);
+            background: var(--surface); margin: .8rem 0; overflow: hidden; }
+  details summary { cursor: pointer; padding: .8rem 1rem; font-weight: bold; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "▸ "; color: var(--accent); }
+  details[open] summary::before { content: "▾ "; }
+  details > *:not(summary) { padding: 0 1rem 1rem; }
+
+  /* ---------- Código + botón copiar ---------- */
+  .code { position: relative; margin: 1rem 0; }
+  .code pre {
+    margin: 0; background: var(--code-bg); color: var(--code-text);
+    border-radius: var(--radius-sm); padding: 1rem 1.1rem; overflow-x: auto;
+    font-family: var(--font-mono); font-size: .85rem; line-height: 1.55;
+    border: 1px solid var(--border);
+  }
+  .code code { font-family: var(--font-mono); }
+  .copy-btn {
+    position: absolute; top: .55rem; right: .55rem;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); border-radius: var(--radius-sm);
+    padding: .25rem .6rem; font-size: .78rem; cursor: pointer; opacity: 0;
+    transition: opacity .2s, background .2s, color .2s;
+  }
+  .code:hover .copy-btn, .copy-btn:focus { opacity: 1; }
+  .copy-btn.done { background: var(--success); color: #fff; border-color: var(--success); }
+  code:not(pre code) { font-family: var(--font-mono); background: var(--surface-alt);
+        padding: .1rem .35rem; border-radius: 5px; font-size: .85em; }
+
+  /* ---------- Toast ---------- */
+  #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(20px);
+           background: var(--success); color: #fff; padding: .6rem 1.1rem; border-radius: 999px;
+           font-size: .85rem; opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; z-index: 100; }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ---------- Mermaid ---------- */
+  .mermaid { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+             padding: 1.2rem; margin: 1rem 0; text-align: center; cursor: zoom-in; }
+  .mermaid svg { max-width: 100%; height: auto; }
+  .mermaid-error { border-left: 4px solid var(--error); background: var(--error-soft);
+                   padding: 1rem 1.2rem; border-radius: var(--radius-sm); cursor: auto; text-align: left; }
+  .mermaid-error pre { margin: .5rem 0 0; background: var(--code-bg); color: var(--code-text);
+                       padding: .8rem; border-radius: var(--radius-sm); overflow-x: auto;
+                       font-family: var(--font-mono); font-size: .8rem; }
+
+  /* ---------- Lightbox ---------- */
+  #lightbox { position: fixed; inset: 0; z-index: 200; display: none;
+              align-items: center; justify-content: center;
+              background: rgba(2,6,18,.6); backdrop-filter: blur(16px); padding: 2rem; }
+  #lightbox.open { display: flex; animation: fadeUp .25s ease; }
+  #lightbox .frame { background: var(--surface); border: 1px solid var(--border);
+                     border-radius: var(--radius); padding: 1.5rem; max-width: 95vw; max-height: 90vh; overflow: auto; }
+  #lightbox .frame svg { max-width: 100%; }
+  #lightbox .x { position: fixed; top: 1.2rem; right: 1.4rem; font-size: 1.6rem;
+                 background: var(--surface); border: 1px solid var(--border); color: var(--text);
+                 border-radius: 999px; width: 44px; height: 44px; cursor: pointer; }
+
+  /* ---------- Glosario ---------- */
+  dl.gloss dt { font-weight: bold; color: var(--accent); margin-top: 1rem; }
+  dl.gloss dd { margin: .2rem 0 0; color: var(--text-muted); }
+
+  footer.site { max-width: var(--maxw); margin: 0 auto; padding: 1.5rem 1.25rem 3rem;
+                color: var(--text-muted); font-size: .82rem; border-top: 1px solid var(--border); }
+
+  /* ---------- Impresión ---------- */
+  @media print {
+    header.site, nav.tabs, .theme-btn, .copy-btn, #toast, #lightbox { display: none !important; }
+    .panel { display: block !important; }
+    body { background: #fff; color: #000; }
+    details[open] > *, details > * { display: block !important; }
+    details { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="bar">
+    <div class="brand">B.I.O.R. · <span>Cam</span></div>
+    <div class="spacer"></div>
+    <button class="theme-btn" id="themeBtn" aria-label="Alternar tema">🌙</button>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Secciones">
+    <button role="tab" aria-selected="true"  data-tab="inicio">Inicio</button>
+    <button role="tab" aria-selected="false" data-tab="bitacora">Bitácora de cambios</button>
+    <button role="tab" aria-selected="false" data-tab="app">La app actual</button>
+    <button role="tab" aria-selected="false" data-tab="problemas">Problemas resueltos</button>
+    <button role="tab" aria-selected="false" data-tab="futuro">A futuro</button>
+    <button role="tab" aria-selected="false" data-tab="referencias">Referencias</button>
+    <button role="tab" aria-selected="false" data-tab="glosario">Glosario</button>
+    <button role="tab" aria-selected="false" data-tab="recuperacion">Recuperación manual</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ============== INICIO ============== -->
+  <section class="panel active" id="inicio" role="tabpanel">
+    <div class="hero">
+      <h4>De un crash del kernel a una app de vigilancia completa</h4>
+      <h1>B.I.O.R. Cam · Orange Pi 5 Max</h1>
+      <p>Panel de control para <strong>cualquier webcam UVC</strong> (diseñado para la EMEET SmartCam S600).
+      El proyecto nació el <strong>15-jun-2026</strong> cuando la cámara S600 tumbó el sistema al tomar la
+      segunda foto — un <em>bug del motor RGA del RK3588 con memorias &gt;4 GB</em>. Lo que empezó como un
+      diagnóstico de emergencia se convirtió en una <strong>app gráfica completa</strong> con controles en vivo,
+      grabación con audio, y modo de vigilancia con detección de movimiento.
+      Todo empaquetado como AppImage para tu Orange Pi 5 Max.</p>
+      <div class="tags">
+        <span class="tag">Orange Pi 5 Max · RK3588</span>
+        <span class="tag">Webcam UVC</span>
+        <span class="tag">EMEET SmartCam S600</span>
+        <span class="tag">PySide6 · OpenCV</span>
+        <span class="tag">AppImage aarch64</span>
+        <span class="tag">App de vigilancia</span>
+      </div>
+    </div>
+
+    <h2>De un vistazo</h2>
+    <div class="cards">
+      <div class="card"><div class="ico">📷</div><h3>Cámara</h3><p>EMEET SmartCam S600 (USB UVC 4K, <code>328f:00ad</code>), MJPEG hasta 3840×2160 @30 fps. Compatible con cualquier webcam UVC.</p></div>
+      <div class="card"><div class="ico">🎛️</div><h3>Control en vivo</h3><p>Brillo, contraste, saturación, gamma, ganancia, nitidez, zoom digital, exposición, foco y balance de blancos (auto/manual).</p></div>
+      <div class="card"><div class="ico">⏺</div><h3>Grabación</h3><p>Vídeo MP4 con <code>h264_rkmpp</code>/<code>hevc_rkmpp</code> + audio AAC. Bitrate 1–50 Mbps, duración límite, marca de agua opcional.</p></div>
+      <div class="card"><div class="ico">🔒</div><h3>Modo Seguridad</h3><p>mpv mantiene una sola conexión UVC. OpenCV analiza capturas confirmadas y conserva un único clip mientras continúa el movimiento.</p></div>
+      <div class="card"><div class="ico">🎞️</div><h3>Efectos + Encuadre</h3><p>6 guías de composición: tercios, áurea, espiral Fibonacci, cruz centrada, diagonales. Efectos: B/N, sepia, vívido, cálido, negativo. Espejo.</p></div>
+      <div class="card"><div class="ico">📦</div><h3>AppImage</h3><p>Todo empaquetado en un solo archivo de 141 MB. Sin dependencias del sistema. Se abre desde el menú de GNOME como "B.I.O.R. Cam".</p></div>
+    </div>
+
+    <div class="callout ok">
+      <strong>🟢 Estado actual</strong>
+      Versión actual: <strong>v2.5</strong>. La app se usa a diario. Esta bitácora registra toda su evolución:
+      desde el crash original hasta las últimas mejoras.
+    </div>
+  </section>
+
+  <!-- ============== BITÁCORA DE CAMBIOS ============== -->
+  <section class="panel" id="bitacora" role="tabpanel">
+    <h2>Bitácora de cambios — del crash al modo seguridad</h2>
+    <p>Registro cronológico de todo lo ocurrido desde el 15-jun-2026.</p>
+
+    <h3>🕐 15-jun · Diagnóstico del crash</h3>
+    <div class="callout err">
+      <strong>💥 El problema</strong>
+      Al tomar la segunda foto con GNOME Snapshot (app Cámara por defecto), el kernel colapsó con
+      una cascada de Oops. Reinicio manual obligado.
+    </div>
+    <p>Fuente: <code>journalctl -b -1</code>. La cámara se conectó a las <strong>19:03</strong> y el
+    colapso ocurrió a las <strong>20:13</strong>.</p>
+    <div class="code">
+      <button class="copy-btn">Copiar</button>
+<pre><code>rga_mm: RGA_MMU unsupported memory larger than 4G!
+rga_mm: scheduler core[4] unsupported mm_flag[0x8]!
+rga_mm: rga_mm_map_buffer map virtual address error!
+rga_mm: job buffer map failed!
+Call trace:
+ rga_request_put_current_mm+0x50/0x64
+ rga_request_submit
+ rga_ioctl_blit
+ rga_ioctl</code></pre>
+    </div>
+    <p><strong>Causa raíz:</strong> El motor 2D <strong>RGA</strong> del RK3588 tiene una MMU de 32 bits
+    que no puede direccionar buffers por encima de 4 GB. Con 16 GB de RAM, los buffers del fotograma
+    caen a veces por encima de esa barrera, el RGA falla y su ruta de error corrompe el kernel.
+    El proceso culpable: <code>snapshot</code> (GNOME Snapshot 46.2) usando GStreamer con el plugin
+    <code>rockchipmpp</code>.</p>
+    <div class="acr">
+      <h4>🔬 ¿Por qué en la SEGUNDA foto y no en la primera?</h4>
+      <p>El fallo es <strong>intermitente</strong>: depende de dónde el asignador de memoria coloque el
+      buffer. Con 16 GB de RAM, a veces cae por debajo de 4 GB (el RGA lo mapea y la foto sale) y a
+      veces por encima (el RGA falla y se lleva el kernel).</p>
+    </div>
+
+    <h3>🕐 15-jun · Arreglo de emergencia</h3>
+    <p>Se creó un override del lanzador de GNOME Snapshot para forzar decodificación por software,
+    evitando el RGA por completo:</p>
+    <p>Ruta: <code>~/.local/share/applications/org.gnome.Snapshot.desktop</code></p>
+    <div class="code">
+      <button class="copy-btn">Copiar</button>
+<pre><code>[Desktop Entry]
+Name=Camera
+Name[es]=Camara
+Exec=env GST_PLUGIN_FEATURE_RANK=mppjpegdec:NONE,mppjpegenc:NONE,mppvideodec:NONE,mpph264enc:NONE,mpph265enc:NONE,mppvp8enc:NONE snapshot
+Type=Application
+Categories=AudioVideo;Video;Recorder;GNOME;GTK;
+Icon=org.gnome.Snapshot
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;</code></pre>
+    </div>
+    <p>También se endureció mpv con capturas por software (medida preventiva, aunque mpv nunca usaba el RGA).</p>
+
+    <h3>🕐 15–16-jun · Nace la app Qt</h3>
+    <p>En lugar de depender de apps de terceros, se creó una aplicación propia con <strong>PySide6</strong>
+    que incrusta mpv directamente en la ventana:</p>
+    <ul>
+      <li><strong>Vídeo incrustado:</strong> mpv con <code>--wid</code> + <code>x11egl</code> (sin Wayland, para respetar el <code>wid</code>).</li>
+      <li><strong>Controles v4l2 en vivo:</strong> brillo, contraste, saturación, gamma, ganancia, nitidez, exposición, foco, balance de blancos.</li>
+      <li><strong>Zoom digital</strong> por <code>video-zoom</code> de mpv (el control v4l2 de la S600 es no-op).</li>
+      <li><strong>Foto</strong> con <code>screenshot video</code> de mpv (libjpeg, CPU).</li>
+      <li><strong>Grabación</strong> con <code>stream-record</code> de mpv + audio paralelo por ffmpeg → MP4 con <code>h264_rkmpp</code> + AAC.</li>
+      <li><strong>Selector de micrófono</strong> con medidor VU en vivo.</li>
+      <li><strong>Efectos:</strong> B/N, sepia, vívido, cálido, negativo (filtro <code>vf</code> de mpv).</li>
+      <li><strong>Encuadre:</strong> guías de tercios / proporción áurea (filtro <code>drawbox</code>).</li>
+      <li><strong>Presets:</strong> 🌙 Poca luz, reset, espejo.</li>
+      <li><strong>Atajos de teclado:</strong> Space (foto), R (grabar), F (foco auto), +/− (zoom), G (abrir fotos).</li>
+      <li><strong>Persistencia:</strong> recuerda resolución, sliders, zoom y micrófono entre sesiones.</li>
+    </ul>
+    <p>Se empaquetó como <strong>AppImage aarch64</strong> (89 MB → 141 MB tras añadir OpenCV y mejoras).</p>
+
+    <h3>🕐 17-jun · Modo Seguridad</h3>
+    <p>Se añadió un modo de vigilancia autónomo con detección de movimiento:</p>
+    <ul>
+      <li><strong>Motor OpenCV:</strong> diferencias de frames a 640×360 @5 fps (mínimo CPU).</li>
+      <li><strong>Sensibilidad</strong> ajustable (1–100), umbral inverso (<code>101 - sensibilidad</code>).</li>
+      <li><strong>Grabación automática</strong> con ffmpeg + <code>h264_rkmpp</code> a la resolución elegida (hasta 4K).</li>
+      <li><strong>Cooldown:</strong> 3–30 s sin movimiento para detener la grabación.</li>
+      <li><strong>Audio opcional</strong> desde cualquier micrófono del sistema (AAC 64k).</li>
+      <li><strong>Overlay 🔴 REC</strong> sobre el preview mientras graba.</li>
+      <li>Clips en <code>~/Vídeos/Camera/Seguridad/</code>.</li>
+    </ul>
+
+    <h3>🕐 17-jun · Correcciones menores</h3>
+    <ul>
+      <li><strong>Ruta de fotos:</strong> cambiada de <code>~/Photos</code> a <code>~/Imágenes/Camera</code>. Fotos migradas.</li>
+      <li><strong>Mango del slider:</strong> reducido de 16×16 a 12×12 para evitar que se corte con el borde.</li>
+      <li><strong>QScrollArea:</strong> se añadió y luego se eliminó porque colapsaba el panel a altura cero.</li>
+      <li><strong>Preview OpenCV:</strong> cambiado a <code>KeepAspectRatio</code> para no distorsionar.</li>
+    </ul>
+
+    <h3>🕐 21-jun · v2.1 — Grandes mejoras</h3>
+    <ul>
+      <li><strong>Bitrate 1–50 Mbps:</strong> tanto en grabación normal como en seguridad. Se recuerda entre sesiones.</li>
+      <li><strong>6 guías de encuadre:</strong> Tercios, Proporción áurea, Espiral Fibonacci (10 rectángulos anidados en φ), Cruz centrada, Diagonales (vía <code>geq</code> a nivel de píxel).</li>
+      <li><strong>Renombrado a B.I.O.R. Cam:</strong> compatible con cualquier webcam UVC, no solo la EMEET S600. QSettings migrados automáticamente.</li>
+      <li><strong>Sonido obturador:</strong> WAV de 40 ms (900 Hz + decay exponencial) generado en <code>~/.cache/biro-cam/shutter.wav</code>. Configurable con checkbox.</li>
+      <li><strong>Fix doble click:</strong> el obturador ya no suena dos veces cuando hay rejilla activa.</li>
+      <li><strong>QScrollArea:</strong> panel envolvente con scroll vertical automático + barra de scroll con estilo oscuro.</li>
+      <li><strong>Modo seguridad mejorado:</strong> deshabilita + oscurece automáticamente todos los controles incompatibles (foto, grabación, calidad, zoom, etc.).</li>
+      <li><strong>Iconos multi-resolución:</strong> 48, 64, 128, 256 px + SVG, instalados en <code>~/.local/share/icons</code> para GNOME.</li>
+      <li><strong>Nuevos atajos:</strong> V (vídeos), T (timestamp), 0 (reset).</li>
+      <li><strong>Tooltips</strong> en todos los botones con atajos de teclado mostrados.</li>
+      <li><strong>Persistencia ampliada:</strong> ahora guarda mirror, efecto, encuadre, auto-modos, sonido obturador, geometría de ventana, todos los ajustes de seguridad.</li>
+      <li><strong>Ventana más grande por defecto:</strong> 960×880 (antes 960×580).</li>
+    </ul>
+
+    <h3>🕐 21-jun · v2.3 — Overlay grande + fixes</h3>
+    <ul>
+      <li><strong>Overlay de seguridad 2× más grande:</strong> 520×340 px (antes 260×180). Icono 64px, título 36px, estado 26px, parámetros 20px.</li>
+      <li><strong>Word wrap + padding:</strong> layout con márgenes (20,16,20,16) y <code>setWordWrap(True)</code> para evitar clipping.</li>
+      <li><strong>Parámetros en 2 líneas:</strong> primera línea partida con <code>\n</code> para que quepa sin recortarse.</li>
+      <li><strong>Sin clic obturador en seguridad:</strong> eliminado <code>_play_shutter()</code> de <code>_on_sec_motion()</code> — el sonido ya no se captura en el audio de la grabación.</li>
+      <li><strong>Fix MKV → MP4:</strong> ruta lenta ahora usa <code>/usr/bin/ffmpeg</code> (con drivers Rockchip) en vez del ffmpeg de conda que fallaba.</li>
+      <li><strong>Error real en notificación:</strong> stderr de ffmpeg redirigido a <code>/tmp/biro-cam-ffmpeg.log</code>, las últimas 3 líneas se muestran en el notify-send de error.</li>
+      <li><strong>Umbral de MKV subido a 10 KB:</strong> archivos corruptos/tiny se saltan sin intentar conversión.</li>
+    </ul>
+
+    <h3>🕐 21-jun · v2.4 — Guardado confirmado</h3>
+    <ul>
+      <li><strong>Marca de tiempo corregida:</strong> los dos puntos de la hora ya no rompen <code>drawtext</code>; el texto se entrega mediante archivo temporal.</li>
+      <li><strong>Conversión segura:</strong> FFmpeg recibe argumentos estructurados y MKV/WAV solo se eliminan después de validar un MP4 mayor de 10 KB.</li>
+      <li><strong>Fallback:</strong> si RKMPP no inicia, se reintenta con <code>libx264</code>/<code>libx265</code>.</li>
+      <li><strong>IPC confirmado:</strong> seguridad lee la respuesta real de mpv al activar <code>stream-record</code>.</li>
+      <li><strong>Detector sin carrera:</strong> alterna dos JPEG y espera a que mpv termine de escribir antes de que OpenCV los lea.</li>
+    </ul>
+
+    <h3>🕐 21-jun · v2.5 — Seguridad estable</h3>
+    <div class="callout warn">
+      <strong>🧩 El error, explicado fácil</strong>
+      Seguridad grababa 10 segundos, cerraba el vídeo y abría otro aunque el movimiento siguiera.
+      Después de repetirlo varias veces, mpv conservaba la ruta de <code>stream-record</code>, pero dejaba
+      de enviar imágenes. Quedaban MKV de 584 bytes mientras cada intento abría otro FFmpeg de audio.
+      La suma de vídeos, audios y conversiones simultáneas terminaba saturando y desordenando el modo seguridad.
+    </div>
+    <ul>
+      <li><strong>Un evento = un clip:</strong> mientras continúe el movimiento se actualiza el último instante detectado; solo se detiene tras el tiempo configurado sin actividad.</li>
+      <li><strong>Sin audios huérfanos:</strong> cualquier fallo detiene inmediatamente el FFmpeg de audio y elimina MKV/WAV incompletos.</li>
+      <li><strong>Autorrecuperación:</strong> si mpv mantiene la ruta pero no escribe cuadros, se reinicia el flujo una vez antes de mostrar un error.</li>
+      <li><strong>Una sola conexión UVC:</strong> mpv conserva la cámara; OpenCV analiza capturas internas en vez de competir por <code>/dev/video0</code>.</li>
+      <li><strong>Estado siempre visible:</strong> overlay nativo elevado sobre el vídeo, indicador persistente en el panel lateral y botón «Seguridad ACTIVA».</li>
+      <li><strong>Resolución coherente:</strong> seguridad usa la misma resolución elegida en el modo normal.</li>
+    </ul>
+  </section>
+
+  <!-- ============== LA APP ACTUAL ============== -->
+  <section class="panel" id="app" role="tabpanel">
+    <h2>La app actual — B.I.O.R. Cam</h2>
+    <p>Aplicación gráfica en <strong>PySide6</strong> con vídeo incrustado, controles en vivo,
+    grabación con audio y modo de vigilancia. Empaquetada como AppImage aarch64 (141 MB).</p>
+
+    <div class="callout ok">
+      <strong>🟢 En uso diario</strong>
+      Arranca desde el menú GNOME como "B.I.O.R. Cam". Ventana de 960×880 con vídeo a la izquierda
+      y panel de controles a la derecha (390 px de ancho fijo) con <strong>QScrollArea</strong>.
+    </div>
+
+    <h3>Panel de controles</h3>
+    <div class="table-wrap">
+      <table>
+        <caption>Secciones del panel derecho.</caption>
+        <thead><tr><th>Sección</th><th>Controles</th></tr></thead>
+        <tbody>
+          <tr><td>Header</td><td>Logo, título, indicador de grabación (● REC + cronómetro), punto de estado del visor (🟢/⚫).</td></tr>
+          <tr><td>Captura</td><td>● Foto, ⏺ Grabar/Detener, 🖼 Fotos, 🎬 Vídeos. Temporizador (3s/10s). Sonido obturador configurable.</td></tr>
+          <tr><td>Calidad foto</td><td>JPG 100/80/60/40%.</td></tr>
+          <tr><td>Micrófono</td><td>Selector de fuente (cámara / K66 USB / integrada / sin audio) + medidor VU en vivo.</td></tr>
+          <tr><td>Resolución</td><td>4K · 30 / 1440p · 30 / 1080p · 60 / 720p · 60 / 480p · 30.</td></tr>
+          <tr><td>Bitrate</td><td>1–50 Mbps (se recuerda entre sesiones).</td></tr>
+          <tr><td>Duración + Códec</td><td>Sin límite / 5 / 15 / 30 / 60 min. H.264 / H.265.</td></tr>
+          <tr><td>Sliders de imagen</td><td>Brillo, Contraste, Saturación, Gamma, Ganancia, Nitidez (v4l2-ctl en vivo).</td></tr>
+          <tr><td>Zoom</td><td>0–100% (zoom digital por <code>video-zoom</code> de mpv).</td></tr>
+          <tr><td>Exposición</td><td>Slider + botón Auto (v4l2).</td></tr>
+          <tr><td>Foco</td><td>Slider + botón Auto (v4l2).</td></tr>
+          <tr><td>Blancos</td><td>Slider (2300–6500K) + botón Auto (v4l2).</td></tr>
+          <tr><td>Efecto</td><td>Sin efecto, B/N, Sepia, Vívido, Cálido, Negativo.</td></tr>
+          <tr><td>Encuadre</td><td>6 guías: Tercios, Áurea, Espiral Fibonacci, Cruz centrada, Diagonales (solo visual, no sale en foto/vídeo).</td></tr>
+          <tr><td>Marca de agua</td><td>Checkbox para quemar fecha/hora en el vídeo (<code>drawtext</code> de ffmpeg).</td></tr>
+          <tr><td>Presets</td><td>🌙 Poca luz, ↺ Reset, 🪞 Espejo.</td></tr>
+          <tr><td>🔒 Seguridad</td><td>Botón de activación + estado persistente, sensibilidad, bitrate 1–50 Mbps, espera sin movimiento y audio. Usa la resolución normal seleccionada.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Modo Seguridad (vigilancia)</h3>
+    <div class="cards">
+      <div class="card"><div class="ico">🎯</div><h3>Detección</h3><p>OpenCV compara capturas alternadas que mpv confirma por IPC. Sensibilidad 1–100, sin abrir una segunda conexión a la webcam.</p></div>
+      <div class="card"><div class="ico">⏺</div><h3>Grabación</h3><p><code>stream-record</code> conserva un solo clip mientras haya movimiento; después convierte a MP4 con RKMPP o fallback por software. Audio opcional.</p></div>
+      <div class="card"><div class="ico">🔴</div><h3>Estado visible</h3><p>Overlay nativo 520×340 sobre el vídeo, indicador persistente en el panel lateral y botón verde «Seguridad ACTIVA».</p></div>
+      <div class="card"><div class="ico">📁</div><h3>Archivos</h3><p><code>~/Vídeos/Camera/Seguridad/Seguridad_TIMESTAMP.mp4</code>. Botón directo "📁 Grabaciones recientes".</p></div>
+    </div>
+
+    <div class="mermaid">
+    flowchart TD
+      A["mpv mantiene /dev/video0"] --> B["Captura confirmada por IPC"]
+      B --> C["OpenCV compara movimiento"]
+      C -->|"Movimiento"| D["stream-record: iniciar o continuar clip"]
+      D --> E["Actualizar instante del último movimiento"]
+      E -->|"Sigue el movimiento"| D
+      E -->|"X s sin movimiento"| F["Cerrar MKV + audio"]
+      F --> G["Convertir y validar MP4"]
+      G --> B
+    </div>
+
+    <h3>Atajos de teclado</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tecla</th><th>Acción</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>Space</kbd> / <kbd>S</kbd></td><td>Tomar foto</td></tr>
+          <tr><td><kbd>R</kbd></td><td>Iniciar/detener grabación</td></tr>
+          <tr><td><kbd>F</kbd></td><td>Alternar foco automático</td></tr>
+          <tr><td><kbd>M</kbd></td><td>Alternar espejo</td></tr>
+          <tr><td><kbd>G</kbd></td><td>Abrir carpeta de fotos</td></tr>
+          <tr><td><kbd>V</kbd></td><td>Abrir carpeta de vídeos</td></tr>
+          <tr><td><kbd>T</kbd></td><td>Alternar marca de agua (fecha/hora)</td></tr>
+          <tr><td><kbd>0</kbd></td><td>Resetear todos los ajustes</td></tr>
+          <tr><td><kbd>+</kbd> / <kbd>-</kbd></td><td>Aumentar/reducir zoom</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Guías de bitrate (H.264 / H.265)</h3>
+    <p>Bitrate ajustable de 1 a 50 Mbps para grabación normal y seguridad.</p>
+    <div class="table-wrap">
+      <table>
+        <caption>Bitrates recomendados según resolución y calidad deseada.</caption>
+        <thead><tr><th>Calidad</th><th>1080p</th><th>4K</th></tr></thead>
+        <tbody>
+          <tr><td>Buena</td><td>5–10 Mbps</td><td>15–25 Mbps</td></tr>
+          <tr><td>Excelente</td><td>10–20 Mbps</td><td>30–50 Mbps</td></tr>
+          <tr><td>Sin pérdida apreciable</td><td>20–40 Mbps</td><td>50 Mbps+</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Persistencia</h3>
+    <p>La app recuerda entre sesiones: resolución, sliders, zoom, micrófono, bitrate,
+    calidad foto, temporizador, timestamp, códec, duración, espejo, efecto, encuadre,
+    auto-exposición/auto-foco/auto-blancos, sonido obturador, geometría de ventana,
+    y todos los ajustes de seguridad (sensibilidad, resolución, bitrate, cooldown, mic).
+    Usa <code>QSettings</code> con grupo <code>BIOR/BiroCam</code>.
+    Migración automática desde el antiguo grupo <code>CarlosOPi/CamaraS600</code>.</p>
+
+    <details>
+      <summary>Notas técnicas (gotchas)</summary>
+      <ul>
+        <li><strong>Nunca</strong> decodificar la S600 con GStreamer <code>rockchipmpp</code> (hardware) → bug RGA &gt;4GB cuelga el kernel. Siempre software.</li>
+        <li>Vídeo incrustado: mpv <code>--gpu-context=x11egl</code> + lanzar <code>sin WAYLAND_DISPLAY</code> (si no, elige wayland e ignora <code>--wid</code> = cuadro negro).</li>
+        <li>Grabación: <strong>no</strong> usar <code>--profile=low-latency</code> (desactiva caché, mkv vacío). Usar caché mínima + <code>stream-record</code>.</li>
+        <li>Audio: el micro es independiente de la cámara → se graba en paralelo con <code>ffmpeg -f pulse -i &lt;source&gt;</code> y se mezcla al detener.</li>
+        <li>Zoom: el <code>zoom_absolute</code> v4l2 de la S600 es no-op → zoom por <code>video-zoom</code> de mpv.</li>
+        <li><strong>Encuadre:</strong> <code>osd-overlay</code> de mpv NO se renderiza aquí → rejilla por filtro <code>drawbox</code> / <code>geq</code> (se quita un instante al tomar la foto; nunca está en el vídeo porque <code>stream-record</code> es pre-filtro).</li>
+        <li>Efectos: filtro <code>vf</code> de mpv (preview+foto) y <code>-vf</code> al convertir la grabación. Foto con <code>screenshot video</code>.</li>
+        <li>VU: nivel por RMS con caída suave (no acumular el pico).</li>
+        <li>Icono en barra GNOME: <code>applicationName="biro-cam"</code> + <code>StartupWMClass=biro-cam</code>. Icono multi-resolución en <code>~/.local/share/icons</code>.</li>
+        <li>Reconstruir: <code>bash packaging/build_appimage.sh</code> (libera el AppImage si está abierto). Entorno conda <code>biro-cam-build</code>.</li>
+        <li><strong>Sonido obturador:</strong> Se genera un WAV de 40 ms (900 Hz con decay) en <code>~/.cache/biro-cam/shutter.wav</code> (ruta escribible, no dentro del AppImage).</li>
+        <li><strong>Panel con scroll:</strong> Envuelto en QScrollArea para que todos los controles sean accesibles aunque la ventana sea pequeña.</li>
+        <li><strong>Espera de seguridad:</strong> cada movimiento actualiza <code>_sec_last_motion</code>. Un temporizador comprueba el tiempo inactivo cada 500 ms y solo cierra el clip al superar la espera configurada.</li>
+        <li><strong>Seguridad + audio:</strong> micro independiente del modo normal. Se captura en paralelo y <code>_stop_sec_audio()</code> garantiza su cierre tanto al terminar como al fallar.</li>
+        <li><strong>Rotación de seguridad:</strong> no abrir/cerrar clips con una periodicidad fija; esa estrategia agotaba <code>stream-record</code> y acumulaba conversiones.</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- ============== PROBLEMAS RESUELTOS ============== -->
+  <section class="panel" id="problemas" role="tabpanel">
+    <h2>Problemas resueltos</h2>
+    <p>Catálogo de issues que encontramos y solucionamos durante el desarrollo.</p>
+
+    <div class="table-wrap">
+      <table>
+        <caption>Issues resueltos — 15 a 21-jun-2026.</caption>
+        <thead><tr><th>#</th><th>Problema</th><th>Causa</th><th>Solución</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><strong>Kernel crash al tomar foto</strong> con GNOME Snapshot</td><td>Bug del motor RGA del RK3588 con buffers &gt;4 GB</td><td>Override del .desktop para forzar decodificación por software (<code>GST_PLUGIN_FEATURE_RANK=...:NONE</code>)</td></tr>
+          <tr><td>2</td><td><strong>Panel de controles invisible</strong> tras añadir QScrollArea</td><td><code>setWidgetResizable(False)</code> colapsaba la altura del panel a ~0</td><td>Eliminar QScrollArea, volver a <code>outer.addWidget(self.panel)</code> directo</td></tr>
+          <tr><td>3</td><td><strong>Mango del slider cortado</strong> por el borde del widget</td><td>El handle medía 16×16 y sobresalía del groove</td><td>Handle reducido a 12×12 con <code>margin: -5px 0</code></td></tr>
+          <tr><td>4</td><td><strong>Ruta de fotos incorrecta</strong> (<code>~/Photos</code> en vez de <code>~/Imágenes/Camera</code>)</td><td>Ruta por defecto de mpv y código anterior</td><td>Cambiar <code>PHOTO_DIR</code> a <code>~/Imágenes/Camera</code> y migrar 18 fotos existentes</td></tr>
+          <tr><td>5</td><td><strong>Preview de seguridad distorsionado</strong></td><td><code>IgnoreAspectRatio</code> al escalar el frame de OpenCV</td><td>Cambiar a <code>KeepAspectRatio</code> en <code>QPixmap.scaled</code></td></tr>
+          <tr><td>6</td><td><strong>Vídeo mpv en negro</strong> en algunos entornos</td><td>mpv elegía Wayland e ignoraba <code>--wid</code></td><td>Forzar X11: <code>QT_QPA_PLATFORM=xcb</code> + eliminar <code>WAYLAND_DISPLAY</code></td></tr>
+          <tr><td>7</td><td><strong>Grabación vacía (MKV 0 bytes)</strong></td><td>Perfil <code>low-latency</code> de mpv desactivaba la caché</td><td>Usar <code>--cache=yes</code> + <code>--cache-secs=0.3</code> en vez de low-latency</td></tr>
+          <tr><td>8</td><td><strong>AppImage de 89 MB se quedaba pequeña</strong></td><td>Al añadir OpenCV y numpy creció el bundle</td><td>Aceptar 141 MB como tamaño final; podar módulos Qt no usados</td></tr>
+          <tr><td>9</td><td><strong>Overlay de seguridad pequeño + texto recortado</strong></td><td>Overlay fijo de 260×180 px con fuentes 11–36px; texto de parámetros demasiado largo</td><td>Overlay 520×340, fuentes 20–64px, word wrap, márgenes internos, parámetros partidos en 2 líneas</td></tr>
+          <tr><td>10</td><td><strong>Clic del obturador audible en grabaciones de seguridad</strong></td><td><code>_play_shutter()</code> se ejecutaba al iniciar grabación de seguridad</td><td>Eliminar <code>_play_shutter()</code> de <code>_on_sec_motion()</code></td></tr>
+          <tr><td>11</td><td><strong>Error "MKV a salvo" al convertir grabación normal</strong></td><td>Ruta lenta usaba <code>ffmpeg</code> de conda sin soporte h264_rkmpp; MKVs corruptos (&lt;10KB) intentaban conversión</td><td>Usar <code>/usr/bin/ffmpeg</code> (sistema), capturar stderr en log, umbral subido a 10 KB</td></tr>
+          <tr><td>12</td><td><strong>Fecha/hora impedía guardar</strong></td><td>Los <code>:</code> de la hora se interpretaban como separadores de opciones de <code>drawtext</code></td><td>Entregar el timestamp mediante un archivo de texto temporal</td></tr>
+          <tr><td>13</td><td><strong>JPEG incompleto en el detector</strong></td><td>OpenCV leía el mismo archivo mientras mpv aún lo escribía</td><td>Alternar dos archivos y esperar respuesta IPC <code>success</code> antes de leer</td></tr>
+          <tr><td>14</td><td><strong>Seguridad creaba clips cada 10 s</strong></td><td>El temporizador detenía siempre, sin considerar movimiento nuevo</td><td>Mantener un clip y actualizar el instante del último movimiento</td></tr>
+          <tr><td>15</td><td><strong>MKV de 584 bytes + WAV creciendo</strong></td><td>mpv conservaba la ruta sin entregar cuadros y el proceso de audio no se cerraba al fallar</td><td>Validar tamaño/propiedad, cerrar audio, limpiar incompletos y recuperar el flujo una vez</td></tr>
+          <tr><td>16</td><td><strong>Estado de seguridad invisible</strong></td><td>La ventana nativa de mpv podía quedar encima del QWidget del overlay</td><td>Overlay nativo con <code>raise_()</code> + estado duplicado en panel lateral y botón</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============== A FUTURO ============== -->
+  <section class="panel" id="futuro" role="tabpanel">
+    <h2>A futuro — ideas y mejoras pendientes</h2>
+    <p>La app está completa y funcional, pero siempre hay margen de mejora. Ideas ordenadas
+    por prioridad estimada:</p>
+
+    <h3>🔜 Corto plazo</h3>
+    <div class="cards">
+      <div class="card"><div class="ico">⚙️</div><h3>Optimización de recursos</h3>
+        <p>Evaluar preview a menor resolución en modo seguridad prolongado, monitorizar
+        CPU/RAM y temperatura de la OPi durante uso continuo. Posible throttling térmico.</p></div>
+      <div class="card"><div class="ico">🔌</div><h3>Recuperación al desconectar</h3>
+        <p>Detectar desconexión de la cámara USB y mostrar un mensaje amigable. Re-conectar
+        automáticamente al volver a aparecer <code>/dev/video0</code>.</p></div>
+    </div>
+
+    <h3>🔜 Medio plazo</h3>
+    <div class="cards">
+      <div class="card"><div class="ico">📋</div><h3>Historial de eventos</h3>
+        <p>Registro de eventos de movimiento con miniaturas, estadísticas de detección
+        (hora, duración, intensidad), y exportación de línea de tiempo.</p></div>
+      <div class="card"><div class="ico">🔔</div><h3>Notificaciones</h3>
+        <p>Notificación del sistema al detectar movimiento con la app en segundo plano
+        o minimizada (usar <code>notify-send</code> o <code>QSystemTrayIcon</code>).</p></div>
+      <div class="card"><div class="ico">📊</div><h3>Dashboard de seguridad</h3>
+        <p>Panel resumen con número de eventos hoy, última detección, espacio usado en
+        disco por los clips de seguridad.</p></div>
+    </div>
+
+    <h3>🔜 Largo plazo</h3>
+    <div class="cards">
+      <div class="card"><div class="ico">🌐</div><h3>Acceso remoto</h3>
+        <p>Streaming vía RTSP o MJPEG over HTTP para ver la cámara desde el móvil.
+        Autenticación básica.</p></div>
+      <div class="card"><div class="ico">🧠</div><h3>Detección inteligente</h3>
+        <p>Clasificar el tipo de movimiento (persona, vehículo, animal) con un modelo
+        ligero (MobileNet, TensorFlow Lite) en la NPU del RK3588.</p></div>
+      <div class="card"><div class="ico">☁️</div><h3>Subida a la nube</h3>
+        <p>Subida automática de clips de seguridad a Nextcloud, Google Drive o S3
+        mediante <code>rclone</code>.</p></div>
+    </div>
+  </section>
+
+  <!-- ============== REFERENCIAS ============== -->
+  <section class="panel" id="referencias" role="tabpanel">
+    <h2>Referencias y enlaces útiles</h2>
+    <p>Documentación, herramientas y recursos utilizados en el proyecto.</p>
+
+    <h3>Hardware</h3>
+    <div class="cards">
+      <div class="card"><div class="ico">🔲</div><h3>Rockchip RK3588</h3>
+        <p><a href="https://www.rock-chips.com/a/en/products/RK35_Series/2022/0926/1664.html" target="_blank">Página oficial</a> ·
+        <a href="https://www.rockchip.fr/RK3588%20datasheet%20V1.0.pdf" target="_blank">Datasheet (PDF)</a></p></div>
+      <div class="card"><div class="ico">📷</div><h3>EMEET SmartCam S600</h3>
+        <p><a href="https://www.emeet.com/products/emeet-smartcam-s600" target="_blank">Producto oficial</a> ·
+        USB UVC 4K, MJPEG 3840×2160 @30, micrófono estéreo integrado.</p></div>
+      <div class="card"><div class="ico">🍊</div><h3>Orange Pi 5 Max</h3>
+        <p><a href="http://www.orangepi.org/html/hardWare/computerAndMicrocontrollers/details/Orange-Pi-5-Max.html" target="_blank">Página oficial</a> ·
+        RK3588, 16 GB RAM LPDDR5, USB 3.0, M.2 NVMe.</p></div>
+    </div>
+
+    <h3>Software</h3>
+    <div class="cards">
+      <div class="card"><div class="ico">🐍</div><h3>PySide6</h3>
+        <p><a href="https://doc.qt.io/qtforpython/" target="_blank">Documentación oficial</a> ·
+        Bindings de Python para Qt6. Versión usada: 6.11.1.</p></div>
+      <div class="card"><div class="ico">🎬</div><h3>mpv</h3>
+        <p><a href="https://mpv.io/manual/stable/" target="_blank">Manual oficial</a> ·
+        <a href="https://github.com/mpv-player/mpv" target="_blank">GitHub</a> ·
+        Reproductor incrustado vía <code>--wid</code> + IPC JSON.</p></div>
+      <div class="card"><div class="ico">👁️</div><h3>OpenCV</h3>
+        <p><a href="https://docs.opencv.org/4.x/" target="_blank">Documentación 4.x</a> ·
+        <a href="https://github.com/opencv/opencv" target="_blank">GitHub</a> ·
+        Detección de movimiento por frame differencing.</p></div>
+      <div class="card"><div class="ico">🎥</div><h3>FFmpeg</h3>
+        <p><a href="https://ffmpeg.org/documentation.html" target="_blank">Documentación</a> ·
+        Grabación con <code>h264_rkmpp</code> (HW encoder RK3588) + audio PulseAudio.</p></div>
+      <div class="card"><div class="ico">📦</div><h3>AppImage</h3>
+        <p><a href="https://docs.appimage.org/" target="_blank">Guía oficial</a> ·
+        <a href="https://github.com/AppImage/appimagetool" target="_blank">appimagetool</a> ·
+        <a href="https://github.com/conda/conda-pack" target="_blank">conda-pack</a> ·
+        Empaquetado del entorno Python en AppDir.</p></div>
+      <div class="card"><div class="ico">🐧</div><h3>Kernel Rockchip</h3>
+        <p><a href="https://wiki.ubuntu.com/ARM/Rockchip" target="_blank">Ubuntu Rockchip wiki</a> ·
+        <a href="https://github.com/orangepi-xunlong/linux-orangepi" target="_blank">Linux Orange Pi</a> ·
+        Kernel 6.1.0-1025-rockchip.</p></div>
+    </div>
+
+    <h3>Otras herramientas</h3>
+    <ul>
+      <li><strong>v4l2-ctl</strong> (v4l-utils) — control de la cámara desde línea de comandos: <code>v4l2-ctl -d /dev/video0 -c &lt;ctrl&gt;=&lt;valor&gt;</code></li>
+      <li><strong>pactl</strong> (PulseAudio) — listar fuentes de audio: <code>pactl list short sources</code></li>
+      <li><strong>GStreamer</strong> — <code>gst-inspect-1.0 mppjpegdec</code> para verificar rango del decodificador</li>
+      <li><strong>conda-pack</strong> — empaquetar entorno conda para distribuir en AppImage</li>
+      <li><strong>Mermaid.js</strong> — diagramas de flujo en esta bitácora: <a href="https://mermaid.js.org/" target="_blank">mermaid.js.org</a></li>
+    </ul>
+
+    <h3>Repositorio del proyecto</h3>
+    <p>Todo el proyecto reside en: <code>~/Documentos/B.I.O.R./5. PROJECTS/CAMARA_EMEET_S600/</code></p>
+    <ul>
+      <li><code>camara_s600.py</code> — aplicación principal</li>
+      <li><code>packaging/build_appimage.sh</code> — script de construcción</li>
+      <li><code>dist/Biro-Cam-aarch64.AppImage</code> — AppImage final (141 MB)</li>
+      <li><code>docs/</code> — esta bitácora y documentación</li>
+      <li><code>assets/</code> — iconos (256, 512, svg)</li>
+    </ul>
+  </section>
+
+  <!-- ============== GLOSARIO ============== -->
+  <section class="panel" id="glosario" role="tabpanel">
+    <h2>Glosario técnico</h2>
+    <dl class="gloss">
+      <dt>RGA (Raster Graphic Acceleration)</dt><dd>Motor 2D del chip RK3588 para escalar/convertir imágenes. Su MMU es de 32 bits: no puede mapear memoria por encima de 4 GB.</dd>
+      <dt>MPP (Media Process Platform)</dt><dd>Stack de Rockchip para codec por hardware (decodifica/codifica vídeo y JPEG en el VPU). En GStreamer son los elementos <code>mpp*</code>.</dd>
+      <dt><code>GST_PLUGIN_FEATURE_RANK</code></dt><dd>Variable de entorno de GStreamer que sube/baja la prioridad de un elemento. Puesta a <code>NONE</code>, evita que se auto-seleccione.</dd>
+      <dt>UVC</dt><dd>USB Video Class: estándar de webcams. La S600 expone MJPEG 4K por UVC.</dd>
+      <dt>Kernel Oops</dt><dd>Error grave del núcleo. Encadenados (cascada) dejan el sistema inestable y obligan a reiniciar.</dd>
+      <dt>GNOME Snapshot</dt><dd>App "Cámara" por defecto de GNOME (binario <code>snapshot</code>), sucesora de Cheese.</dd>
+      <dt>h264_rkmpp</dt><dd>Codificador de vídeo H.264 por hardware del RK3588 (MPP). Se usa en ffmpeg con <code>-c:v h264_rkmpp</code> para grabar sin carga de CPU.</dd>
+      <dt>Frame differencing</dt><dd>Técnica de detección de movimiento que resta dos frames consecutivos; los píxeles diferentes indican cambio.</dd>
+    </dl>
+  </section>
+
+  <!-- ============== RECUPERACIÓN MANUAL ============== -->
+  <section class="panel" id="recuperacion" role="tabpanel">
+    <h2>Recuperación manual (si algo colapsa)</h2>
+    <p>Todo lo aplicado son archivos de usuario. Si necesitas dejar el sistema como estaba <strong>antes</strong>
+    de los cambios, ejecuta:</p>
+
+    <h3>Revertir el arreglo de la Cámara por defecto</h3>
+    <div class="code">
+      <button class="copy-btn">Copiar</button>
+<pre><code>rm -f ~/.local/share/applications/org.gnome.Snapshot.desktop
+update-desktop-database ~/.local/share/applications</code></pre>
+    </div>
+    <p>La app volverá a usar el lanzador original de <code>/usr/share/applications/</code> (con hardware MPP/RGA,
+    es decir, volvería a ser vulnerable al colapso).</p>
+
+    <h3>Revertir la app Qt</h3>
+    <p>La app está empaquetada como AppImage en <code>~/…/CAMARA_EMEET_S600/dist/Biro-Cam-aarch64.AppImage</code>.
+    Para desinstalarla, simplemente borra el archivo AppImage y el lanzador del menú si lo añadiste manualmente.</p>
+
+    <div class="callout">
+      <strong>🔵 Qué pasarme si vuelve a fallar</strong>
+      <ol style="margin:.4rem 0 0 1.1rem">
+        <li>Esta bitácora HTML.</li>
+        <li>La salida de: <code>journalctl -b -1 | grep -iE 'rga|Oops|snapshot' | tail -60</code></li>
+        <li>Qué app usabas (Cámara por defecto / AppImage) y en qué falló.</li>
+      </ol>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site">
+  B.I.O.R. Cam · Orange Pi 5 Max (RK3588) · creado 15-jun, actualizado 21-jun-2026 (v2.5: clips por evento, cierre seguro de audio, autorrecuperación y estado persistente) · Diseñada para abrirse desde <code>file://</code> sin servidor · Sistema de diseño B.I.O.R.
+</footer>
+
+<!-- Toast + Lightbox -->
+<div id="toast">✓ Copiado</div>
+<div id="lightbox"><button class="x" aria-label="Cerrar">✕</button><div class="frame"></div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+/* ---------- Pestañas (ARIA + teclado + hash) ---------- */
+const tabBtns = [...document.querySelectorAll('nav.tabs button')];
+const panels  = [...document.querySelectorAll('.panel')];
+function showTab(id, focus) {
+  tabBtns.forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
+  panels.forEach(p => p.classList.toggle('active', p.id === id));
+  history.replaceState(null, '', '#' + id);
+  if (focus) tabBtns.find(b => b.dataset.tab === id)?.focus();
+}
+tabBtns.forEach((b, i) => {
+  b.addEventListener('click', () => showTab(b.dataset.tab));
+  b.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight') showTab(tabBtns[(i + 1) % tabBtns.length].dataset.tab, true);
+    if (e.key === 'ArrowLeft')  showTab(tabBtns[(i - 1 + tabBtns.length) % tabBtns.length].dataset.tab, true);
+    if (e.key === 'Home') showTab(tabBtns[0].dataset.tab, true);
+    if (e.key === 'End')  showTab(tabBtns[tabBtns.length - 1].dataset.tab, true);
+  });
+});
+if (location.hash && document.getElementById(location.hash.slice(1))) showTab(location.hash.slice(1));
+
+/* ---------- Tema ---------- */
+const root = document.documentElement, themeBtn = document.getElementById('themeBtn');
+function applyTheme(t) {
+  root.setAttribute('data-theme', t);
+  themeBtn.textContent = t === 'dark' ? '🌙' : '☀️';
+  renderAllMermaid();
+}
+if (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) applyTheme('light');
+themeBtn.addEventListener('click', () =>
+  applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'));
+
+/* ---------- Copiar ---------- */
+const toast = document.getElementById('toast');
+function flashToast() { toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 1800); }
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const text = btn.closest('.code').querySelector('code').innerText;
+    try { await navigator.clipboard.writeText(text); }
+    catch { const ta = document.createElement('textarea'); ta.value = text;
+            document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+    btn.textContent = '✓ Copiado'; btn.classList.add('done'); flashToast();
+    setTimeout(() => { btn.textContent = 'Copiar'; btn.classList.remove('done'); }, 2000);
+  });
+});
+
+/* ---------- Mermaid defensivo ---------- */
+document.querySelectorAll('.mermaid').forEach(el => {
+  if (!el.dataset.src) el.dataset.src = el.textContent.trim();
+});
+const mermaidTheme = () => root.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+async function renderAllMermaid() {
+  if (typeof mermaid === 'undefined') return;
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'loose',
+    suppressErrorRendering: true, theme: mermaidTheme(), fontFamily: 'Arial, sans-serif' });
+  for (const el of document.querySelectorAll('.mermaid')) {
+    const code = el.dataset.src; const id = 'mmd-' + Math.random().toString(36).slice(2);
+    try {
+      await mermaid.parse(code);
+      const { svg } = await mermaid.render(id, code);
+      el.innerHTML = svg; el.style.cursor = 'zoom-in';
+    } catch (e) {
+      el.style.cursor = 'auto';
+      el.innerHTML = '<div class="mermaid-error"><strong>⚠️ No se pudo renderizar el diagrama.</strong>' +
+        '<p>Revisa la sintaxis. Código fuente:</p><pre>' +
+        code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre></div>';
+      console.warn('Mermaid error:', e);
+    }
+  }
+}
+document.addEventListener('DOMContentLoaded', renderAllMermaid);
+
+/* ---------- Lightbox ---------- */
+const lb = document.getElementById('lightbox'), lbFrame = lb.querySelector('.frame');
+document.querySelectorAll('.mermaid').forEach(el => el.addEventListener('click', () => {
+  if (el.querySelector('svg')) { lbFrame.innerHTML = el.querySelector('svg').outerHTML; lb.classList.add('open'); }
+}));
+function closeLb() { lb.classList.remove('open'); }
+lb.querySelector('.x').addEventListener('click', closeLb);
+lb.addEventListener('click', e => { if (e.target === lb) closeLb(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); });
+</script>
+</body>
+</html>
