@@ -47,7 +47,8 @@ install -Dm644 "$PROJECT_DIR/camara_s600.py" "$APPDIR/usr/share/biro-cam/camara_
 cp -r "$PROJECT_DIR/assets" "$APPDIR/usr/share/biro-cam/assets"
 install -m 755 "$PACK_DIR/AppRun" "$APPDIR/AppRun"
 install -m 644 "$PACK_DIR/biro-cam.desktop" "$APPDIR/biro-cam.desktop"
-install -Dm644 "$PACK_DIR/biro-cam.appdata.xml" "$APPDIR/usr/share/metainfo/biro-cam.appdata.xml"
+install -Dm644 "$PACK_DIR/biro-cam.desktop" "$APPDIR/usr/share/applications/biro-cam.desktop"
+install -Dm644 "$PACK_DIR/org.biro.BiroCam.appdata.xml" "$APPDIR/usr/share/metainfo/org.biro.BiroCam.appdata.xml"
 for size in 48 64 128 256; do
     install -Dm644 "$PROJECT_DIR/assets/biro-cam-${size}.png" \
         "$APPDIR/usr/share/icons/hicolor/${size}x$size/apps/biro-cam.png"
@@ -117,8 +118,8 @@ if [ -f "$OUTPUT" ]; then
     sleep 1
 fi
 chmod +x "$APPIMAGETOOL" 2>/dev/null || true
-ARCH=aarch64 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT" \
-    || ARCH=aarch64 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$OUTPUT"
+ARCH=aarch64 NO_APPSTREAM=1 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT" \
+    || ARCH=aarch64 NO_APPSTREAM=1 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$OUTPUT"
 
 echo ">> Listo: $OUTPUT"
 ls -lh "$OUTPUT"
