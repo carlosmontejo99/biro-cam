@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 
 # ----------------------------------------------------------------------------- Config
 APP_DIR   = os.path.dirname(os.path.abspath(__file__))
-VERSION   = "v2.7"
+VERSION   = "v2.8"
 
 
 def clean_env(env=None):
@@ -1436,6 +1436,10 @@ class Panel(QMainWindow):
             ts_filter, timestamp_file = timestamp_filter("normal")
             filters.append(ts_filter)
         br = getattr(self, "_rec_bitrate", 6)
+        try:
+            _, _, fps, _ = RESOLUTIONS[self.res_combo.currentIndex()]
+        except Exception:
+            fps = 30
         cmd = ["/usr/bin/ffmpeg", "-y", "-i", mkv]
         has_audio = bool(wav and os.path.exists(wav) and os.path.getsize(wav) > 4096)
         if has_audio:
@@ -1444,7 +1448,7 @@ class Panel(QMainWindow):
         cmd += ["-map", "0:v:0"]
         if has_audio:
             cmd += ["-map", "1:a:0"]
-        cmd += ["-c:v", codec, "-b:v", f"{br}M"]
+        cmd += ["-c:v", codec, "-b:v", f"{br}M", "-r", str(fps)]
         if codec.startswith("hevc"):
             cmd += ["-tag:v", "hvc1"]
         else:

@@ -136,3 +136,8 @@ _Última actualización: 2026-06-21_
 - Se implementa `clean_env()` para aislar todas las llamadas a subprocesos externos (`ffmpeg`, `ffprobe`, `pactl`, `v4l2-ctl`, `mpv`, `xdg-open`, `paplay`, `notify-send`) de las variables de entorno de la AppImage (como `LD_LIBRARY_PATH`), previniendo errores de carga de librerías incompatibles.
 - Se restablece la redirección de errores a `subprocess.PIPE` en `ffmpeg` de audio para capturar y mostrar detalles en la barra de estado en caso de fallos.
 
+## Corrección v2.8 · 10-jul-2026
+
+- **Solución a grabaciones a 1080p 60fps aceleradas (250 FPS):** Se fuerza la tasa de fotogramas del vídeo de salida (`-r <fps>`) durante la conversión de FFmpeg, obteniendo el valor exacto de la resolución activa seleccionada (por ejemplo, 60 FPS para 1080p/720p o 30 FPS para 4K). Esto evita que FFmpeg interprete incorrectamente la tasa de cuadros de los paquetes MJPEG de mpv y prevenga el efecto de cámara rápida y desincronización de audio.
+
+

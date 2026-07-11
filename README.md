@@ -1,4 +1,4 @@
-# B.I.O.R. Cam v2.7 — Panel de control de cámara USB / AppImage
+# B.I.O.R. Cam v2.8 — Panel de control de cámara USB / AppImage
 
 App de control para **cualquier webcam UVC** (diseñada para la EMEET SmartCam S600) en Orange Pi 5 Max (RK3588).
 
