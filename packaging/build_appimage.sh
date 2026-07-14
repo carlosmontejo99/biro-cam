@@ -21,6 +21,21 @@ APPIMAGETOOL="${APPIMAGETOOL:-$REAL_HOME/.cache/the_curator/appimagetool-aarch64
 OUTPUT="$PROJECT_DIR/dist/Biro-Cam-aarch64.AppImage"
 CONDA_PACK="${CONDA_PACK:-$REAL_HOME/miniforge3/bin/conda-pack}"
 
+for cmd in tar install find; do
+    command -v "$cmd" >/dev/null || {
+        echo "ERROR: falta la herramienta requerida: $cmd" >&2
+        exit 1
+    }
+done
+[ -x "$CONDA_PACK" ] || {
+    echo "ERROR: conda-pack no es ejecutable: $CONDA_PACK" >&2
+    exit 1
+}
+[ -f "$APPIMAGETOOL" ] || {
+    echo "ERROR: no se encontró appimagetool ARM64: $APPIMAGETOOL" >&2
+    exit 1
+}
+
 echo ">> Limpiando AppDir previo…"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr" "$PROJECT_DIR/dist"
@@ -100,7 +115,8 @@ rm -f "$SP/Qt/lib/"libav*.so* "$SP/Qt/lib/"libsw*.so* 2>/dev/null || true
 echo ">> Bundleando libxcb-cursor (la necesita el plugin xcb para incrustar el vídeo bajo XWayland)…"
 QTLIB="$SP/Qt/lib"
 if [ ! -e "$QTLIB/libxcb-cursor.so.0" ]; then
-    XCBCUR=$(ls "$HOME"/miniforge3/pkgs/xcb-util-cursor-*/lib/libxcb-cursor.so.0 2>/dev/null | head -1)
+    XCBCUR=$(find "$REAL_HOME/miniforge3/pkgs" -path \
+        '*/xcb-util-cursor-*/lib/libxcb-cursor.so.0' -print -quit 2>/dev/null || true)
     if [ -n "$XCBCUR" ]; then cp "$XCBCUR"* "$QTLIB/" && echo "   + libxcb-cursor copiada"
     else echo "   ! AVISO: no se encontró libxcb-cursor en pkgs de conda"; fi
 fi

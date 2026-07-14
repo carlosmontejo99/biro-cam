@@ -29,39 +29,14 @@ from datetime import datetime
 
 import cv2
 import numpy as np
-import threading
 
-from PySide6.QtCore import Qt, QTimer, QSettings, QEvent, QProcess, QObject, Signal, QThread
-from PySide6.QtGui import QIcon, QPixmap, QShortcut, QKeySequence, QImage
+from PySide6.QtCore import Qt, QTimer, QSettings, QEvent, QProcess, QObject, Signal
+from PySide6.QtGui import QIcon, QPixmap, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QMainWindow, QProgressBar, QPushButton, QScrollArea, QSlider,
     QVBoxLayout, QWidget,
 )
-
-# Intento de importación defensiva de freenect
-try:
-    import freenect
-    FREENECT_AVAILABLE = True
-except ImportError:
-    freenect = None
-    FREENECT_AVAILABLE = False
-
-
-def check_kinect_connected():
-    if not FREENECT_AVAILABLE:
-        return False
-    try:
-        ctx = freenect.init()
-        if not ctx:
-            return False
-        try:
-            return freenect.num_devices(ctx) > 0
-        finally:
-            freenect.shutdown(ctx)
-    except Exception:
-        return False
-
 
 # ----------------------------------------------------------------------------- Config
 APP_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -247,166 +222,7 @@ def mpv_ipc_result(command: list, timeout=3.0):
         return {"error": str(exc)}
 
 
-
-# ----------------------------------------------------------------------------- Hilo de Adquisición de Kinect
-class KinectWorker(QThread):
-    frame_ready = Signal(np.ndarray, np.ndarray)  # rgb, depth
-    status = Signal(str)
-    error = Signal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.running = False
-        self.ctx = None
-        self.dev = None
-        self.video_mode = "RGB"  # "RGB" o "IR"
-        self._target_tilt = None
-        self._target_led = None
-        self._rgb_frame = None
-        self._depth_frame = None
-        self._lock = threading.Lock()
-
-    def set_tilt(self, angle):
-        self._target_tilt = max(-27, min(27, angle))
-
-    def set_led(self, led_val):
-        self._target_led = led_val
-
-    def set_mode(self, mode):
-        self.video_mode = mode
-
-    def run(self):
-        if not FREENECT_AVAILABLE:
-            self.error.emit("freenect no está instalado")
-            return
-
-        streams_started = False
-        try:
-            self.ctx = freenect.init()
-            if not self.ctx:
-                raise RuntimeError("No se pudo crear el contexto de libfreenect")
-            if freenect.num_devices(self.ctx) <= 0:
-                raise RuntimeError("No hay ningún dispositivo Kinect conectado")
-            self.dev = freenect.open_device(self.ctx, 0)
-            if not self.dev:
-                raise RuntimeError("libfreenect no pudo abrir el dispositivo")
-        except Exception as e:
-            self.error.emit(f"No se pudo iniciar Kinect: {e}")
-            if self.ctx:
-                try:
-                    freenect.shutdown(self.ctx)
-                except Exception:
-                    pass
-            self.ctx = None
-            return
-
-        # Callbacks
-        def video_cb(dev, data, timestamp):
-            with self._lock:
-                self._rgb_frame = data.copy()
-
-        def depth_cb(dev, data, timestamp):
-            with self._lock:
-                self._depth_frame = data.copy()
-
-        freenect.set_video_callback(self.dev, video_cb)
-        freenect.set_depth_callback(self.dev, depth_cb)
-
-        # Configurar formatos iniciales
-        current_mode = freenect.VIDEO_RGB
-        try:
-            freenect.set_video_mode(self.dev, freenect.RESOLUTION_MEDIUM, current_mode)
-            freenect.set_depth_mode(self.dev, freenect.RESOLUTION_MEDIUM, freenect.DEPTH_11BIT)
-            freenect.start_video(self.dev)
-            freenect.start_depth(self.dev)
-            streams_started = True
-        except Exception as e:
-            self.error.emit(f"Error al configurar flujos de Kinect: {e}")
-            self._release_device(streams_started)
-            return
-
-        self.running = True
-        self.status.emit("Kinect conectado y transmitiendo")
-
-        while self.running and not self.isInterruptionRequested():
-            # Procesar eventos de USB
-            try:
-                freenect.process_events(self.ctx)
-            except Exception as e:
-                print("Error process_events:", e)
-                break
-
-            # Aplicar inclinación si hay cambio pendiente
-            if self._target_tilt is not None:
-                try:
-                    freenect.set_tilt_degs(self.dev, self._target_tilt)
-                except Exception as e:
-                    print("Error set_tilt_degs:", e)
-                self._target_tilt = None
-
-            # Aplicar LED si hay cambio pendiente
-            if self._target_led is not None:
-                try:
-                    freenect.set_led(self.dev, self._target_led)
-                except Exception as e:
-                    print("Error set_led:", e)
-                self._target_led = None
-
-            # Aplicar cambio de modo de video
-            target_vid_mode = freenect.VIDEO_IR_8BIT if self.video_mode == "IR" else freenect.VIDEO_RGB
-            if target_vid_mode != current_mode:
-                try:
-                    freenect.stop_video(self.dev)
-                    freenect.set_video_mode(self.dev, freenect.RESOLUTION_MEDIUM, target_vid_mode)
-                    freenect.start_video(self.dev)
-                    current_mode = target_vid_mode
-                except Exception as e:
-                    print("Error al cambiar modo de vídeo:", e)
-
-            # Obtener y emitir frames
-            with self._lock:
-                rgb = self._rgb_frame
-                depth = self._depth_frame
-                self._rgb_frame = None
-                self._depth_frame = None
-
-            if rgb is not None and depth is not None:
-                self.frame_ready.emit(rgb, depth)
-
-            self.msleep(15)  # Evitar saturar el procesador
-
-        self._release_device(streams_started)
-        self.status.emit("Kinect apagado")
-
-    def _release_device(self, streams_started):
-        """Libera libusb exactamente una vez, incluso tras una inicialización parcial."""
-        try:
-            if self.dev and streams_started:
-                try:
-                    freenect.stop_video(self.dev)
-                finally:
-                    freenect.stop_depth(self.dev)
-        except Exception:
-            pass
-        try:
-            if self.dev:
-                freenect.close_device(self.dev)
-        except Exception:
-            pass
-        finally:
-            self.dev = None
-        try:
-            if self.ctx:
-                freenect.shutdown(self.ctx)
-        except Exception:
-            pass
-        finally:
-            self.ctx = None
-            self.running = False
-
-
 # ----------------------------------------------------------------------------- Motor de Seguridad
-
 class SecurityEngine(QObject):
     """Detecta movimiento en capturas de mpv sin reabrir el dispositivo UVC."""
 
@@ -424,87 +240,6 @@ class SecurityEngine(QObject):
         self._timer.timeout.connect(self._process)
         self.sensitivity = 25
         self.cooldown = 10
-        self.intelligent_detection = True
-        self._rknn_model = None
-        self._hog_model = None
-        self._init_npu()
-
-    def _init_npu(self):
-        try:
-            from rknnlite.api import RKNNLite
-            self._rknn_model = RKNNLite()
-            model_path = os.path.join(APP_DIR, "assets", "yolov8n-pose_rk3588.rknn")
-            if not os.path.exists(model_path):
-                model_path = os.path.join(APP_DIR, "assets", "yolov8n_rk3588.rknn")
-            if os.path.exists(model_path):
-                ret = self._rknn_model.load_rknn(model_path)
-                if ret == 0 and self._rknn_model.init_runtime(
-                        core_mask=RKNNLite.NPU_CORE_AUTO) == 0:
-                    print("SecurityEngine: NPU RK3588 cargado para seguridad ✓")
-                    return
-            self._release_npu()
-            self._rknn_model = None
-        except Exception:
-            self._release_npu()
-            self._rknn_model = None
-
-    def _release_npu(self):
-        model = self._rknn_model
-        if model is not None:
-            try:
-                model.release()
-            except Exception:
-                pass
-
-    def shutdown(self):
-        self.stop()
-        self._release_npu()
-        self._rknn_model = None
-        self._hog_model = None
-
-    def _detect_humans(self, frame):
-        h, w, _ = frame.shape
-        # 1. Usar NPU de Rockchip si el modelo RKNN fue cargado
-        if self._rknn_model:
-            try:
-                img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                img_resized = cv2.resize(img_rgb, (640, 640))
-                outputs = self._rknn_model.inference(inputs=[img_resized])
-                if outputs and len(outputs) >= 1:
-                    data = outputs[0][0]
-                    boxes = []
-                    for i in range(data.shape[1]):
-                        score = data[4, i]
-                        if score > 0.45:
-                            cx = int(data[0, i] * w / 640)
-                            cy = int(data[1, i] * h / 640)
-                            cw = int(data[2, i] * w / 640)
-                            ch = int(data[3, i] * h / 640)
-                            boxes.append((max(0, cx - cw//2), max(0, cy - ch//2), cw, ch))
-                    if len(boxes) > 0:
-                        return boxes
-            except Exception as e:
-                print("Error NPU en detector de seguridad:", e)
-
-        # 2. Fallback a detector HOG (CPU OpenCV) integrado
-        if self._hog_model is None:
-            self._hog_model = cv2.HOGDescriptor()
-            self._hog_model.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-
-        scale = 1.0
-        if w > 640:
-            scale = 640.0 / w
-            img_small = cv2.resize(frame, (640, int(h * scale)))
-        else:
-            img_small = frame.copy()
-
-        gray = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
-        boxes, _ = self._hog_model.detectMultiScale(gray, winStride=(8, 8), padding=(8, 8), scale=1.05)
-
-        real_boxes = []
-        for (bx, by, bw, bh) in boxes:
-            real_boxes.append((int(bx / scale), int(by / scale), int(bw / scale), int(bh / scale)))
-        return real_boxes
 
     # -- control de vida --
     def start(self, sensitivity=25, cooldown=10):
@@ -547,8 +282,8 @@ class SecurityEngine(QObject):
             return
         try:
             self._process_inner()
-        except Exception as e:
-            print("Error en proceso de seguridad:", e)
+        except Exception:
+            pass  # evita que un error en detección cuelgue la app
 
     def _process_inner(self):
         if not self.capturing:
@@ -564,45 +299,27 @@ class SecurityEngine(QObject):
             self.status.emit("Error captura detector: JPEG inválido")
             return
 
-        motion = False
-        if self.intelligent_detection:
-            # Detección inteligente de personas
-            boxes = self._detect_humans(frame)
-            if len(boxes) > 0:
-                motion = True
-                for (bx, by, bw, bh) in boxes:
-                    cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
-                    cv2.putText(frame, "HUMANO", (bx, by - 8),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-            else:
-                motion = False
-        else:
-            # Detección clásica por diferencia de píxeles
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (21, 21), 0)
-
-            if self._prev_gray is None:
-                self._prev_gray = gray
-                self.frame_ready.emit(frame)
-                return
-
-            diff = cv2.absdiff(self._prev_gray, gray)
-            threshold = max(1, 101 - self.sensitivity)
-            thresh = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)[1]
-            thresh = cv2.dilate(thresh, None, iterations=2)
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL,
-                                            cv2.CHAIN_APPROX_SIMPLE)
-            self._prev_gray = gray
-            motion = any(cv2.contourArea(c) > 500 for c in contours)
-
-            if motion:
-                for c in contours:
-                    if cv2.contourArea(c) > 500:
-                        (bx, by, bw, bh) = cv2.boundingRect(c)
-                        cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), (0, 0, 255), 1)
-
-        # Emitir el frame con rectángulos al preview HUD
+        # Emitir para el preview
         self.frame_ready.emit(frame)
+
+        # Detección de movimiento por diferencias
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
+
+        if self._prev_gray is None:
+            self._prev_gray = gray
+            return
+
+        diff = cv2.absdiff(self._prev_gray, gray)
+        # Invertir: sensibilidad alta → umbral bajo (detecta más)
+        threshold = max(1, 101 - self.sensitivity)
+        thresh = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)[1]
+        thresh = cv2.dilate(thresh, None, iterations=2)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL,
+                                        cv2.CHAIN_APPROX_SIMPLE)
+        self._prev_gray = gray
+
+        motion = any(cv2.contourArea(c) > 500 for c in contours)
 
         if motion:
             self.motion_detected.emit()
@@ -684,13 +401,6 @@ class Panel(QMainWindow):
         self.security_label.setStyleSheet("background:#000;")
         self.security_label.hide()
 
-        # ---- Preview del modo Kinect (OpenCV) -------------------------------
-        self.kinect_label = QLabel(self.video)
-        self.kinect_label.setAlignment(Qt.AlignCenter)
-        self.kinect_label.setStyleSheet("background:#000;")
-        self.kinect_label.hide()
-
-
         # ---- Panel de controles (derecha) ---------------------------------
         self.panel = QWidget()
         self.panel.setObjectName("panel")
@@ -705,7 +415,6 @@ class Panel(QMainWindow):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setObjectName("panel_scroll")
         outer.addWidget(scroll)
-        self.emeet_widgets = []
 
         # ---- Header: logo + título + estado del visor ---------------------
         head = QHBoxLayout()
@@ -729,21 +438,6 @@ class Panel(QMainWindow):
         head.addWidget(self.dot)
         lay.addLayout(head)
         lay.addWidget(self._sep())
-
-        # ---- Selector de Cámara / Dispositivo ----
-        self.dev_select_box = QWidget()
-        dev_select_lay = QHBoxLayout(self.dev_select_box)
-        dev_select_lay.setContentsMargins(0, 0, 0, 4)
-        dev_select_lay.addWidget(QLabel("Dispositivo:"))
-        self.dev_combo = QComboBox()
-        self.dev_combo.addItem("🎥 EMEET SmartCam S600", "emeet")
-        if check_kinect_connected():
-            self.dev_combo.addItem("🛡️ Xbox 360 Kinect", "kinect")
-        self.dev_combo.currentIndexChanged.connect(self._on_device_changed)
-        dev_select_lay.addWidget(self.dev_combo, 1)
-        lay.addWidget(self.dev_select_box)
-        lay.addWidget(self._sep())
-
 
         # ---- Acciones: captura ---------------------------------------------
         top = QHBoxLayout()
@@ -838,7 +532,6 @@ class Panel(QMainWindow):
         self.res_combo.currentIndexChanged.connect(self.change_resolution)
         res_row.addWidget(self.res_combo, 1)
         lay.addWidget(self.res_box)
-        self.emeet_widgets.append(self.res_box)
 
         # ---- Bitrate de grabación (se bloquea al grabar) --------------------
         self.bitrate_box = QWidget(); self.bitrate_box.setObjectName("lockrow")
@@ -883,9 +576,7 @@ class Panel(QMainWindow):
         lay.addSpacing(2)
 
         # ---- Deslizadores de imagen ---------------------------------------
-        self.sliders_grid_widget = QWidget()
-        grid = QGridLayout(self.sliders_grid_widget)
-        grid.setContentsMargins(0, 0, 0, 0)
+        grid = QGridLayout()
         grid.setVerticalSpacing(6)
         self.sliders = {}
         self.value_labels = {}
@@ -903,28 +594,19 @@ class Panel(QMainWindow):
             grid.addWidget(vlab, row, 2)
             self.sliders[cid] = sld
             self.value_labels[cid] = vlab
-        lay.addWidget(self.sliders_grid_widget)
-        self.emeet_widgets.append(self.sliders_grid_widget)
-
+        lay.addLayout(grid)
 
         lay.addSpacing(4)
         lay.addWidget(self._sep())
         lay.addSpacing(2)
 
         # ---- Zoom ----------------------------------------------------------
-        self.zoom_container = QWidget()
-        zoom_lay = QVBoxLayout(self.zoom_container)
-        zoom_lay.setContentsMargins(0, 0, 0, 0)
         self.zoom_slider, self.zoom_label = self._special_row(
-            zoom_lay, "Zoom", 0, 100, 0, self._on_zoom, suffix="%")  # zoom digital de mpv
-        lay.addWidget(self.zoom_container)
-        self.emeet_widgets.append(self.zoom_container)
+            lay, "Zoom", 0, 100, 0, self._on_zoom, suffix="%")  # zoom digital de mpv
 
         # ---- Exposición (con auto) ----------------------------------------
-        self.exp_container = QWidget()
-        exp_lay = QHBoxLayout(self.exp_container)
-        exp_lay.setContentsMargins(0, 0, 0, 0)
-        exp_lay.addWidget(QLabel("Exposición"))
+        exp_row = QHBoxLayout()
+        exp_row.addWidget(QLabel("Exposición"))
         self.exp_slider = QSlider(Qt.Horizontal)
         self.exp_slider.setRange(1, 5000)
         self.exp_slider.setValue(v4l2_get("exposure_time_absolute") or 300)
@@ -933,16 +615,13 @@ class Panel(QMainWindow):
         self.btn_exp_auto.setCheckable(True)
         self.btn_exp_auto.setChecked(True)
         self.btn_exp_auto.clicked.connect(self._toggle_exp_auto)
-        exp_lay.addWidget(self.exp_slider, 1)
-        exp_lay.addWidget(self.btn_exp_auto)
-        lay.addWidget(self.exp_container)
-        self.emeet_widgets.append(self.exp_container)
+        exp_row.addWidget(self.exp_slider, 1)
+        exp_row.addWidget(self.btn_exp_auto)
+        lay.addLayout(exp_row)
 
         # ---- Foco (con auto) ----------------------------------------------
-        self.foc_container = QWidget()
-        foc_lay = QHBoxLayout(self.foc_container)
-        foc_lay.setContentsMargins(0, 0, 0, 0)
-        foc_lay.addWidget(QLabel("Foco"))
+        foc_row = QHBoxLayout()
+        foc_row.addWidget(QLabel("Foco"))
         self.foc_slider = QSlider(Qt.Horizontal)
         self.foc_slider.setRange(0, 1023)
         self.foc_slider.setValue(v4l2_get("focus_absolute") or 192)
@@ -951,16 +630,13 @@ class Panel(QMainWindow):
         self.btn_foc_auto.setCheckable(True)
         self.btn_foc_auto.setChecked(True)
         self.btn_foc_auto.clicked.connect(self._toggle_foc_auto)
-        foc_lay.addWidget(self.foc_slider, 1)
-        foc_lay.addWidget(self.btn_foc_auto)
-        lay.addWidget(self.foc_container)
-        self.emeet_widgets.append(self.foc_container)
+        foc_row.addWidget(self.foc_slider, 1)
+        foc_row.addWidget(self.btn_foc_auto)
+        lay.addLayout(foc_row)
 
         # ---- Balance de blancos (con auto) — neutraliza tintes de color -----
-        self.wb_container = QWidget()
-        wb_lay = QHBoxLayout(self.wb_container)
-        wb_lay.setContentsMargins(0, 0, 0, 0)
-        wb_lay.addWidget(QLabel("Blancos"))
+        wb_row = QHBoxLayout()
+        wb_row.addWidget(QLabel("Blancos"))
         self.wb_slider = QSlider(Qt.Horizontal)
         self.wb_slider.setRange(2300, 6500)       # temperatura de color (K)
         self.wb_slider.setValue(v4l2_get("white_balance_temperature") or 5000)
@@ -969,12 +645,10 @@ class Panel(QMainWindow):
         self.btn_wb_auto.setCheckable(True)
         self.btn_wb_auto.setChecked(True)
         self.btn_wb_auto.clicked.connect(self._toggle_wb_auto)
-        wb_lay.addWidget(self.wb_slider, 1)
-        wb_lay.addWidget(self.btn_wb_auto)
-        lay.addWidget(self.wb_container)
-        self.emeet_widgets.append(self.wb_container)
+        wb_row.addWidget(self.wb_slider, 1)
+        wb_row.addWidget(self.btn_wb_auto)
+        lay.addLayout(wb_row)
         self.wb_auto = True
-
 
         lay.addSpacing(4)
         lay.addWidget(self._sep())
@@ -1013,9 +687,7 @@ class Panel(QMainWindow):
         lay.addSpacing(2)
 
         # ---- Presets -------------------------------------------------------
-        self.presets_container = QWidget()
-        pre_lay = QHBoxLayout(self.presets_container)
-        pre_lay.setContentsMargins(0, 0, 0, 0)
+        pre = QHBoxLayout()
         b_low = QPushButton("🌙 Poca luz")
         b_rst = QPushButton("↺ Reset")
         b_mir = QPushButton("🪞 Espejo")
@@ -1027,9 +699,8 @@ class Panel(QMainWindow):
         b_mir.clicked.connect(self._toggle_mirror)
         for b in (b_low, b_rst, b_mir):
             b.setMinimumHeight(34)
-            pre_lay.addWidget(b)
-        lay.addWidget(self.presets_container)
-        self.emeet_widgets.append(self.presets_container)
+            pre.addWidget(b)
+        lay.addLayout(pre)
 
         # ---- Botón de seguridad (fila completa, independiente) -------------
         self.btn_sec = QPushButton("🔒  Modo Seguridad")
@@ -1037,8 +708,6 @@ class Panel(QMainWindow):
         self.btn_sec.setMinimumHeight(38)
         self.btn_sec.clicked.connect(self._toggle_security)
         lay.addWidget(self.btn_sec)
-        self.emeet_widgets.append(self.btn_sec)
-
 
         # ---- Panel de ajustes de seguridad (oculto por defecto) ------------
         self.security_panel = QWidget()
@@ -1075,13 +744,6 @@ class Panel(QMainWindow):
             self.sec_mic_combo.addItem(label, name)
         sec_mic_row.addWidget(self.sec_mic_combo, 1)
         sec_lay.addLayout(sec_mic_row)
-
-        # Filtro inteligente de personas (NPU/CPU)
-        self.sec_npu_check = QCheckBox("👤 Filtro Inteligente de Personas (NPU/CPU)")
-        self.sec_npu_check.setChecked(True)
-        self.sec_npu_check.toggled.connect(self._on_sec_npu_toggled)
-        sec_lay.addWidget(self.sec_npu_check)
-
         sec_lay.addSpacing(2)
         sec_lay.addWidget(self._sep())
         # Botón para abrir la carpeta de grabaciones
@@ -1093,74 +755,6 @@ class Panel(QMainWindow):
         sec_lay.addWidget(self.btn_sec_grab)
         self.security_panel.hide()
         lay.addWidget(self.security_panel)
-        self.emeet_widgets.append(self.security_panel)
-
-        # ---- Panel de controles Kinect (oculto por defecto) ------------------
-        self.kinect_panel = QWidget()
-        kin_lay = QVBoxLayout(self.kinect_panel)
-        kin_lay.setContentsMargins(0, 0, 0, 0)
-        kin_lay.setSpacing(8)
-
-        # 1. Selector de Vista Kinect
-        view_row = QHBoxLayout()
-        view_row.addWidget(QLabel("Vista Kinect:"))
-        self.kin_view_combo = QComboBox()
-        self.kin_view_combo.addItems([
-            "Color (RGB)",
-            "Infrarrojo (IR)",
-            "Profundidad (Depth)",
-            "Dividido (Split)",
-            "Miniatura (PiP)"
-        ])
-        self.kin_view_combo.currentIndexChanged.connect(self._on_kinect_settings_changed)
-        view_row.addWidget(self.kin_view_combo, 1)
-        kin_lay.addLayout(view_row)
-
-        # 2. Deslizador de Inclinación (Motor Tilt)
-        tilt_row = QHBoxLayout()
-        tilt_row.addWidget(QLabel("Inclinación:"))
-        self.tilt_slider = QSlider(Qt.Horizontal)
-        self.tilt_slider.setRange(-27, 27)
-        self.tilt_slider.setValue(0)
-        self.tilt_val_lbl = QLabel("0°")
-        self.tilt_val_lbl.setMinimumWidth(30)
-        self.tilt_val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.tilt_slider.valueChanged.connect(self._on_tilt_changed)
-        tilt_row.addWidget(self.tilt_slider, 1)
-        tilt_row.addWidget(self.tilt_val_lbl)
-        kin_lay.addLayout(tilt_row)
-
-        # 3. Selector de LED
-        led_row = QHBoxLayout()
-        led_row.addWidget(QLabel("LED Frontal:"))
-        self.led_combo = QComboBox()
-        self.led_combo.addItem("Apagado", 0)
-        self.led_combo.addItem("Verde", 1)
-        self.led_combo.addItem("Rojo", 2)
-        self.led_combo.addItem("Amarillo", 3)
-        self.led_combo.addItem("Parpadeo Verde", 4)
-        self.led_combo.addItem("Parpadeo Rojo/Amarillo", 6)
-        self.led_combo.currentIndexChanged.connect(self._on_kinect_settings_changed)
-        led_row.addWidget(self.led_combo, 1)
-        kin_lay.addLayout(led_row)
-
-        # 4. Tracking NPU/GPU
-        tracking_row = QHBoxLayout()
-        self.tracking_check = QCheckBox("👤 Tracking Corporal (NPU/GPU)")
-        self.tracking_check.toggled.connect(self._on_kinect_settings_changed)
-        tracking_row.addWidget(self.tracking_check)
-        kin_lay.addLayout(tracking_row)
-
-        # Botón para abrir la carpeta de grabaciones Kinect (reutiliza VIDEO_DIR)
-        self.btn_kin_grab = QPushButton("📁 Grabaciones Kinect")
-        self.btn_kin_grab.setMinimumHeight(34)
-        self.btn_kin_grab.clicked.connect(self._open_videos)
-        kin_lay.addWidget(self.btn_kin_grab)
-
-        # Registrar panel en la UI
-        lay.addWidget(self.kinect_panel)
-        self.kinect_panel.hide()
-
 
         self.status = QLabel("Listo")
         self.status.setStyleSheet("color: #8aa; padding-top: 4px;")
@@ -1168,23 +762,12 @@ class Panel(QMainWindow):
         self._apply_dark_theme()
         self._add_shortcuts()
 
-        # ---- Motor de seguridad -------------------------------------------
-        self.security_active = False
-        self.security_recording = False
-        self._sec_rec_path = ""
-        self._sec_last_frame = None
-        self._conversions = {}
-        self.security_engine = SecurityEngine(self)
-        self.security_engine.frame_ready.connect(self._security_frame_cb)
-        self.security_engine.motion_detected.connect(self._on_sec_motion)
-        self.security_engine.status.connect(self._flash)
-
         # Restaurar ajustes guardados ANTES de arrancar mpv (para usar la última resolución).
         self.settings = QSettings("BIOR", "BiroCam")
         self._migrate_settings()
         self._restore_settings()
 
-        QTimer.singleShot(300, self._initial_device_setup)
+        QTimer.singleShot(300, self.launch_mpv)
 
         # Monitor del visor: actualiza el punto de estado cada 1.5 s.
         self._mpv_timer = QTimer(self)
@@ -1203,315 +786,19 @@ class Panel(QMainWindow):
         self._vu_decay.start(60)
         self._restart_vu()
 
-
-
-    # ----------------------------------------------------------------- Métodos de Kinect
-    def _on_device_changed(self, idx):
-        dev_type = self.dev_combo.currentData()
-        if dev_type == "kinect":
-            self._flash("Cambiando a Kinect...")
-            # Detener visor de EMEET (mpv)
-            if self.mpv_proc and self.mpv_proc.poll() is None:
-                mpv_ipc(["quit"])
-                try:
-                    self.mpv_proc.wait(timeout=1.5)
-                except Exception:
-                    self.mpv_proc.terminate()
-            self.mpv_proc = None
-
-            # Ocultar controles EMEET
-            for w in self.emeet_widgets:
-                w.hide()
-
-            # Mostrar controles Kinect
-            self.kinect_panel.show()
-            self.kinect_label.show()
-
-            # Iniciar captura
-            self._start_kinect()
-        else:
-            self._flash("Cambiando a EMEET...")
-            self._stop_kinect()
-            self.kinect_label.hide()
-            self.kinect_panel.hide()
-
-            # Mostrar controles EMEET
-            for w in self.emeet_widgets:
-                w.show()
-
-            # Lanzar visor
-            self.launch_mpv()
-
-    def _start_kinect(self):
-        if not self._stop_kinect():
-            self._flash("⚠ Kinect anterior aún se está apagando")
-            return
-        self.kinect_worker = KinectWorker(self)
-        self.kinect_worker.frame_ready.connect(self._on_kinect_frame)
-        self.kinect_worker.status.connect(self._flash)
-        self.kinect_worker.error.connect(lambda msg: (self._flash(f"⚠ {msg}"), QTimer.singleShot(0, lambda: self.dev_combo.setCurrentIndex(0))))
-
-        # Sincronizar inclinación, led y modo
-        self.kinect_worker.set_tilt(self.tilt_slider.value())
-        self.kinect_worker.set_led(self.led_combo.currentData() or 0)
-        view_idx = self.kin_view_combo.currentIndex()
-        self.kinect_worker.set_mode("IR" if view_idx == 1 else "RGB")
-
-        self.kinect_worker.start()
-
-    def _stop_kinect(self):
-        if hasattr(self, "kinect_worker") and self.kinect_worker:
-            worker = self.kinect_worker
-            worker.running = False
-            worker.requestInterruption()
-            if not worker.wait(3000):
-                # process_events() pertenece a libfreenect y puede tardar en retornar.
-                # Conservar la referencia evita destruir un QThread todavía activo.
-                self._flash("⏳ Esperando que libfreenect libere el dispositivo…")
-                return False
-            self.kinect_worker = None
-        return True
-
-    def _on_tilt_changed(self, val):
-        self.tilt_val_lbl.setText(f"{val}°")
-        if hasattr(self, "kinect_worker") and self.kinect_worker:
-            self.kinect_worker.set_tilt(val)
-
-    def _on_kinect_settings_changed(self):
-        if hasattr(self, "kinect_worker") and self.kinect_worker:
-            view_idx = self.kin_view_combo.currentIndex()
-            self.kinect_worker.set_mode("IR" if view_idx == 1 else "RGB")
-            self.kinect_worker.set_led(self.led_combo.currentData() or 0)
-
-    def _on_kinect_frame(self, rgb, depth):
-        view_idx = self.kin_view_combo.currentIndex()
-
-        # Conversión inicial a BGR detectando dinámicamente si es escala de grises o color
-        if len(rgb.shape) == 2 or rgb.shape[2] == 1:
-            bgr = cv2.cvtColor(rgb, cv2.COLOR_GRAY2BGR)
-        else:
-            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-
-        # Profundidad a color (mapa de calor Jet)
-        depth_8 = (depth >> 3).astype(np.uint8)
-        depth_colored = cv2.applyColorMap(depth_8, cv2.COLORMAP_JET)
-
-        # Layout composiciones
-        h, w, _ = bgr.shape
-        if view_idx == 2: # Sólo Profundidad
-            final_frame = depth_colored
-        elif view_idx == 3: # Lado a lado
-            final_frame = np.hstack((bgr, depth_colored))
-        elif view_idx == 4: # PiP
-            final_frame = bgr.copy()
-            pip_w, pip_h = w // 3, h // 3
-            pip_depth = cv2.resize(depth_colored, (pip_w, pip_h))
-            final_frame[h - pip_h - 10:h - 10, w - pip_w - 10:w - 10] = pip_depth
-        else:
-            final_frame = bgr
-
-        # Filtros (espejo/efectos/rejillas)
-        final_frame = self._apply_kinect_filters(final_frame)
-
-        # Reconocimiento corporal (NPU/GPU)
-        if self.tracking_check.isChecked():
-            final_frame = self._perform_skeleton_tracking(final_frame)
-
-        # Timestamp
-        if self.ts_checkbox.isChecked():
-            ts_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cv2.putText(final_frame, ts_str, (10, final_frame.shape[0] - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-
-        # Respaldar frame para foto
-        self._last_kinect_frame = final_frame.copy()
-
-        # Guardar si se está grabando
-        if self.recording:
-            self._write_kinect_frame(final_frame)
-
-        # Mostrar en pantalla
-        self._display_kinect_frame(final_frame)
-
-    def _apply_kinect_filters(self, frame):
-        # 1. Espejo
-        if self.mirror:
-            frame = cv2.flip(frame, 1)
-
-        # 2. Efecto de imagen
-        effect_idx = self.fx_combo.currentIndex()
-        if effect_idx == 1: # B/N
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        elif effect_idx == 2: # Sepia
-            kernel = np.array([[0.272, 0.534, 0.131],
-                               [0.349, 0.686, 0.168],
-                               [0.393, 0.769, 0.189]])
-            frame = cv2.transform(frame, kernel)
-        elif effect_idx == 3: # Vívido
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
-            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * 1.6, 0, 255)
-            frame = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
-            frame = cv2.convertScaleAbs(frame, alpha=1.08, beta=0)
-        elif effect_idx == 4: # Cálido
-            frame = cv2.addWeighted(frame, 0.9, np.full(frame.shape, (0, 40, 40), dtype=np.uint8), 0.1, 0)
-        elif effect_idx == 5: # Negativo
-            frame = 255 - frame
-
-        # 3. Encuadre
-        grid_idx = self.grid_combo.currentIndex()
-        h, w, _ = frame.shape
-        if grid_idx == 1: # Tercios
-            cv2.line(frame, (w // 3, 0), (w // 3, h), (255, 255, 255), 1)
-            cv2.line(frame, (2 * w // 3, 0), (2 * w // 3, h), (255, 255, 255), 1)
-            cv2.line(frame, (0, h // 3), (w, h // 3), (255, 255, 255), 1)
-            cv2.line(frame, (0, 2 * h // 3), (w, 2 * h // 3), (255, 255, 255), 1)
-        elif grid_idx == 2: # Proporción áurea
-            x1, x2 = int(w * 0.382), int(w * 0.618)
-            y1, y2 = int(h * 0.382), int(h * 0.618)
-            cv2.line(frame, (x1, 0), (x1, h), (255, 255, 255), 1)
-            cv2.line(frame, (x2, 0), (x2, h), (255, 255, 255), 1)
-            cv2.line(frame, (0, y1), (w, y1), (255, 255, 255), 1)
-            cv2.line(frame, (0, y2), (w, y2), (255, 255, 255), 1)
-        elif grid_idx == 4: # Cruz
-            cv2.line(frame, (w // 2, 0), (w // 2, h), (255, 255, 255), 1)
-            cv2.line(frame, (0, h // 2), (w, h // 2), (255, 255, 255), 1)
-        elif grid_idx == 5: # Diagonales
-            cv2.line(frame, (0, 0), (w, h), (255, 255, 255), 1)
-            cv2.line(frame, (w, 0), (0, h), (255, 255, 255), 1)
-
-        return frame
-
-    def _display_kinect_frame(self, frame):
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb_frame.shape
-        bytes_per_line = ch * w
-        qimg = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-
-        vw, vh = self.video.width(), self.video.height()
-        pixmap = QPixmap.fromImage(qimg)
-        scaled_pixmap = pixmap.scaled(vw, vh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.kinect_label.setPixmap(scaled_pixmap)
-        self.kinect_label.setGeometry(0, 0, vw, vh)
-
-    def _perform_skeleton_tracking(self, frame):
-        if not hasattr(self, "_rknn_pose_model") and not hasattr(self, "_mp_pose_model"):
-            self._init_pose_model()
-
-        if hasattr(self, "_rknn_pose_model") and self._rknn_pose_model:
-            return self._run_npu_pose(frame)
-        elif hasattr(self, "_mp_pose_model") and self._mp_pose_model:
-            return self._run_mp_pose(frame)
-        else:
-            cv2.putText(frame, "Buscando Pose Tracker...", (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            h, w, _ = frame.shape
-            cv2.circle(frame, (w//2, h//3), 20, (0, 255, 0), -1)
-            cv2.line(frame, (w//2, h//3 + 20), (w//2, h//2 + 50), (0, 255, 0), 3)
-            cv2.line(frame, (w//2, h//3 + 40), (w//2 - 50, h//2), (0, 255, 0), 3)
-            cv2.line(frame, (w//2, h//3 + 40), (w//2 + 50, h//2), (0, 255, 0), 3)
-            cv2.line(frame, (w//2, h//2 + 50), (w//2 - 40, h - 80), (0, 255, 0), 3)
-            cv2.line(frame, (w//2, h//2 + 50), (w//2 + 40, h - 80), (0, 255, 0), 3)
-            return frame
-
-    def _init_pose_model(self):
-        # 1. Intentar NPU de Rockchip
-        try:
-            from rknnlite.api import RKNNLite
-            self._rknn_pose_model = RKNNLite()
-            rknn_path = os.path.join(APP_DIR, "assets", "yolov8n-pose_rk3588.rknn")
-            if os.path.exists(rknn_path):
-                ret = self._rknn_pose_model.load_rknn(rknn_path)
-                if ret == 0:
-                    self._rknn_pose_model.init_runtime(core_mask=RKNNLite.NPU_CORE_AUTO)
-                    self._flash("NPU RK3588 Pose Tracker cargado ✓")
-                    return
-            self._rknn_pose_model = None
-        except Exception:
-            self._rknn_pose_model = None
-
-        # 2. Intentar MediaPipe GPU/CPU fallback
-        try:
-            import mediapipe as mp
-            self._mp_pose = mp.solutions.pose
-            self._mp_draw = mp.solutions.drawing_utils
-            self._mp_pose_model = self._mp_pose.Pose(
-                static_image_mode=False,
-                model_complexity=1,
-                min_detection_confidence=0.5
-            )
-            self._flash("GPU/CPU MediaPipe Pose Tracker cargado ✓")
-        except Exception:
-            self._mp_pose_model = None
-
-    def _run_mp_pose(self, frame):
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self._mp_pose_model.process(rgb)
-        if results.pose_landmarks:
-            self._mp_draw.draw_landmarks(
-                frame,
-                results.pose_landmarks,
-                self._mp_pose.POSE_CONNECTIONS,
-                self._mp_draw.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
-                self._mp_draw.DrawingSpec(color=(0, 0, 255), thickness=2)
-            )
-        return frame
-
-    def _run_npu_pose(self, frame):
-        input_size = 640
-        h, w, _ = frame.shape
-        img_resized = cv2.resize(frame, (input_size, input_size))
-        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-        outputs = self._rknn_pose_model.inference(inputs=[img_rgb])
-        try:
-            if outputs and len(outputs) >= 1:
-                data = outputs[0][0]
-                for i in range(data.shape[1]):
-                    score = data[4, i]
-                    if score > 0.5:
-                        for kp in range(17):
-                            kx = int(data[5 + kp*3, i] * w / input_size)
-                            ky = int(data[5 + kp*3 + 1, i] * h / input_size)
-                            kconf = data[5 + kp*3 + 2, i]
-                            if kconf > 0.5:
-                                cv2.circle(frame, (kx, ky), 5, (0, 255, 0), -1)
-        except Exception as e:
-            print("Error postprocesamiento NPU:", e)
-        return frame
-
-    def _write_kinect_frame(self, frame):
-        if hasattr(self, "kinect_writer") and self.kinect_writer:
-            try:
-                fh, fw, _ = frame.shape
-                view_idx = self.kin_view_combo.currentIndex()
-                target_w, target_h = (1280, 480) if view_idx == 3 else (640, 480)
-                if fw != target_w or fh != target_h:
-                    frame = cv2.resize(frame, (target_w, target_h))
-                self.kinect_writer.write(frame)
-            except Exception as e:
-                print("Error escribiendo frame:", e)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "video"):
-            vw, vh = self.video.width(), self.video.height()
-            if hasattr(self, "security_label"):
-                self.security_label.setGeometry(0, 0, vw, vh)
-            if hasattr(self, "kinect_label"):
-                self.kinect_label.setGeometry(0, 0, vw, vh)
-            if hasattr(self, "security_overlay") and self.security_overlay.isVisible():
-                bw, bh = 520, 340
-                self.security_overlay.setGeometry((vw - bw) // 2, (vh - bh) // 2, bw, bh)
-
-    def _initial_device_setup(self):
-        if self.dev_combo.currentData() == "kinect":
-            self._on_device_changed(self.dev_combo.currentIndex())
-        else:
-            self.launch_mpv()
+        # ---- Motor de seguridad -------------------------------------------
+        self.security_active = False
+        self.security_recording = False
+        self._sec_rec_path = ""
+        self._sec_last_frame = None
+        self._conversions = {}
+        self.security_engine = SecurityEngine(self)
+        self.security_engine.frame_ready.connect(self._security_frame_cb)
+        self.security_engine.motion_detected.connect(self._on_sec_motion)
+        self.security_engine.status.connect(self._flash)
 
     # ----------------------------------------------------------------- helpers UI
     def _sep(self):
-
         f = QFrame(); f.setFrameShape(QFrame.HLine); f.setStyleSheet("color:#2a3550;")
         return f
 
@@ -1941,8 +1228,6 @@ class Panel(QMainWindow):
             i = self.sec_mic_combo.findData(s.value("sec_mic"))
             if i >= 0:
                 self.sec_mic_combo.setCurrentIndex(i)
-        if s.contains("sec_npu"):
-            self.sec_npu_check.setChecked(s.value("sec_npu") == "true")
         # Geometría de ventana
         if s.contains("window_geometry"):
             try:
@@ -1953,26 +1238,6 @@ class Panel(QMainWindow):
                 pass
         if s.contains("window_maximized") and s.value("window_maximized") == "true":
             QTimer.singleShot(100, self.showMaximized)
-
-        # Ajustes de Kinect
-        if s.contains("kinect_view"):
-            self.kin_view_combo.setCurrentIndex(int(s.value("kinect_view")))
-        if s.contains("kinect_tilt"):
-            self.tilt_slider.setValue(int(s.value("kinect_tilt")))
-        if s.contains("kinect_led"):
-            # Buscar el índice correspondiente al valor guardado
-            val = int(s.value("kinect_led"))
-            idx = self.led_combo.findData(val)
-            if idx >= 0:
-                self.led_combo.setCurrentIndex(idx)
-        if s.contains("kinect_tracking"):
-            self.tracking_check.setChecked(s.value("kinect_tracking") == "true")
-        if s.contains("device_selector"):
-            dev_idx = self.dev_combo.findData(s.value("device_selector"))
-            if dev_idx >= 0:
-                self.dev_combo.blockSignals(True)
-                self.dev_combo.setCurrentIndex(dev_idx)
-                self.dev_combo.blockSignals(False)
 
     def _save_settings(self):
         s = self.settings
@@ -2000,15 +1265,6 @@ class Panel(QMainWindow):
         s.setValue("sec_bitrate", self.sec_bitrate_slider.value())
         s.setValue("sec_cooldown", self.sec_cooldown_slider.value())
         s.setValue("sec_mic", self.sec_mic_combo.currentData() or "")
-        s.setValue("sec_npu", "true" if self.sec_npu_check.isChecked() else "false")
-
-        # Guardar ajustes de Kinect
-        s.setValue("device_selector", self.dev_combo.currentData() or "emeet")
-        s.setValue("kinect_view", self.kin_view_combo.currentIndex())
-        s.setValue("kinect_tilt", self.tilt_slider.value())
-        s.setValue("kinect_led", self.led_combo.currentData() or 0)
-        s.setValue("kinect_tracking", "true" if self.tracking_check.isChecked() else "false")
-
         # Geometría de ventana
         if not self.isMaximized():
             s.setValue("window_geometry",
@@ -2094,19 +1350,6 @@ class Panel(QMainWindow):
     def _do_take_photo(self):
         self._apply_photo_settings()
         self._play_shutter()
-
-        if self.dev_combo.currentData() == "kinect":
-            if hasattr(self, "_last_kinect_frame") and self._last_kinect_frame is not None:
-                ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                idx = self.photo_quality_combo.currentIndex()
-                _, _, qual = PHOTO_QUALITY[idx]
-                photo_path = os.path.join(PHOTO_DIR, f"Foto_{ts}.jpg")
-                cv2.imwrite(photo_path, self._last_kinect_frame, [cv2.IMWRITE_JPEG_QUALITY, qual])
-                self._flash("📷 Foto Kinect guardada")
-            else:
-                self._flash("⚠ No hay frame disponible")
-            return
-
         if self.grid:
             mpv_ipc(["set_property", "vf", self._vf_chain(with_grid=False)])
             QTimer.singleShot(140, self._snap_and_restore)
@@ -2120,10 +1363,6 @@ class Panel(QMainWindow):
         QTimer.singleShot(60, self._apply_vf)   # restaurar la rejilla
 
     def toggle_record(self):
-        if self.dev_combo.currentData() == "kinect":
-            self._toggle_record_kinect()
-            return
-
         if self.recording:
             # 1) parar vídeo (mpv) y audio (ffmpeg) ---------------------------
             mpv_ipc_result(["set_property", "stream-record", ""])
@@ -2178,71 +1417,6 @@ class Panel(QMainWindow):
             else:
                 self._flash("● Grabando (sin audio)")
 
-    def _toggle_record_kinect(self):
-        if self.recording:
-            # Detener grabación
-            self.recording = False
-            if hasattr(self, "kinect_writer") and self.kinect_writer:
-                try:
-                    self.kinect_writer.release()
-                except Exception:
-                    pass
-                self.kinect_writer = None
-            self.btn_rec.setText("⏺ Grabar")
-            self._set_locked(False)
-            self._rec_timer.stop()
-            self.rec_label.setVisible(False)
-            self._stop_audio_capture(self._audio_proc)
-            self._flash("Procesando vídeo Kinect…")
-            QTimer.singleShot(800, self._finish_recording)
-        else:
-            # Iniciar grabación
-            os.makedirs(VIDEO_DIR, exist_ok=True)
-            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            self._last_video = os.path.join(VIDEO_DIR, f"Video_{ts}.mkv")
-            self._audio_wav = ""
-            self._audio_proc = None
-
-            # Inicializar VideoWriter
-            view_idx = self.kin_view_combo.currentIndex()
-            target_w, target_h = (1280, 480) if view_idx == 3 else (640, 480)
-            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-            self.kinect_writer = cv2.VideoWriter(self._last_video, fourcc, 30.0, (target_w, target_h))
-
-            mic = self.mic_combo.currentData()
-            self._rec_effect = ""  # Los efectos ya se queman en vivo vía OpenCV
-            self._rec_bitrate = self.bitrate_slider.value()
-            self._rec_timestamp = False  # Ya se quema en vivo si ts_checkbox está marcado
-            self._rec_codec = CODECS[self.codec_combo.currentIndex()][1]
-            self._rec_max_duration = REC_DURATIONS[self.dur_combo.currentIndex()][1]
-            video_t0 = time.monotonic()
-
-            self._audio_offset = 0.0
-            audio_error = ""
-            if mic:
-                self._audio_wav = os.path.join(VIDEO_DIR, f"Video_{ts}.wav")
-                self._audio_proc, audio_error = self._start_audio_capture(mic, self._audio_wav)
-                self._audio_offset = max(0.0, time.monotonic() - video_t0)
-                if not self._audio_proc:
-                    self._audio_wav = ""
-
-            self.recording = True
-            self.btn_rec.setText("⏹ Detener")
-            self._set_locked(True)
-            self._rec_t0 = time.monotonic()
-            self._rec_blink = True
-            self.rec_label.setVisible(True)
-            self._rec_tick()
-            self._rec_timer.start(500)
-            self._play_shutter()
-            if self._audio_proc:
-                self._flash("● Grabando Kinect + audio 🎙")
-            elif mic:
-                self._flash(f"● Grabando Kinect SIN audio · {audio_error}")
-            else:
-                self._flash("● Grabando Kinect (sin audio)")
-
-
     def _finish_recording(self):
         """Convierte la grabación a MP4 (vídeo+audio+efecto) en segundo plano."""
         mkv = self._last_video
@@ -2262,13 +1436,10 @@ class Panel(QMainWindow):
             ts_filter, timestamp_file = timestamp_filter("normal")
             filters.append(ts_filter)
         br = getattr(self, "_rec_bitrate", 6)
-        if self.dev_combo.currentData() == "kinect":
+        try:
+            _, _, fps, _ = RESOLUTIONS[self.res_combo.currentIndex()]
+        except Exception:
             fps = 30
-        else:
-            try:
-                _, _, fps, _ = RESOLUTIONS[self.res_combo.currentIndex()]
-            except Exception:
-                fps = 30
         cmd = ["/usr/bin/ffmpeg", "-y", "-i", mkv]
         has_audio = bool(wav and os.path.exists(wav) and os.path.getsize(wav) > 4096)
         if has_audio:
@@ -2507,12 +1678,8 @@ class Panel(QMainWindow):
         if not self.security_active:
             return
         self._sec_last_frame = frame
-
-        # Ocultar la etiqueta para que mpv renderice el visor nativo de forma 100% fluida
-        if not self.security_label.isHidden():
-            self.security_label.hide()
-        self.security_overlay.raise_()  # Mantener HUD del modo seguridad por encima
-
+        self.security_overlay.raise_()
+        # mpv sigue siendo el preview fluido; la captura solo alimenta el detector.
         if self.security_overlay.isVisible() and time.monotonic() - self._sec_overlay_ts > 1.0:
             if not self.security_recording:
                 self.sec_status_lbl.setText("Detector listo ✓")
@@ -2685,9 +1852,6 @@ class Panel(QMainWindow):
     def _on_sec_cooldown(self, v):
         self.security_engine.set_cooldown(v)
 
-    def _on_sec_npu_toggled(self, checked):
-        self.security_engine.intelligent_detection = checked
-
     def closeEvent(self, event):
         if not getattr(self, "_close_when_finished", False) and (
                 self.recording or self.security_recording or self._conversions):
@@ -2702,25 +1866,6 @@ class Panel(QMainWindow):
             return
         self._save_settings()
         self._stop_security()
-        if not self._stop_kinect():
-            event.ignore()
-            QTimer.singleShot(500, self.close)
-            return
-        self.security_engine.shutdown()
-        pose_model = getattr(self, "_rknn_pose_model", None)
-        if pose_model is not None:
-            try:
-                pose_model.release()
-            except Exception:
-                pass
-            self._rknn_pose_model = None
-        mp_pose_model = getattr(self, "_mp_pose_model", None)
-        if mp_pose_model is not None:
-            try:
-                mp_pose_model.close()
-            except Exception:
-                pass
-            self._mp_pose_model = None
         if self._audio_proc and self._audio_proc.poll() is None:
             self._audio_proc.terminate()
         if self._vu_proc:
