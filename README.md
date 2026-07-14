@@ -1,9 +1,11 @@
-# B.I.O.R. Cam v2.8 — Panel de control de cámara USB / AppImage
+# B.I.O.R. Cam v2.9 — Cámara 4K, seguridad NPU y Kinect para RK3588
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21304061.svg)](https://doi.org/10.5281/zenodo.21304061)
 
 
-App de control para **cualquier webcam UVC** (diseñada para la EMEET SmartCam S600) en Orange Pi 5 Max (RK3588).
+Aplicación de control y grabación para cámaras UVC en Orange Pi 5 Max (RK3588),
+diseñada para la EMEET SmartCam S600, con modo Seguridad mediante YOLOv5 acelerado
+por NPU y soporte opcional para Xbox 360 Kinect.
 
 > 📍 **Hogar único del proyecto:**
 > `~/Documentos/B.I.O.R./5. PROJECTS/CAMARA_EMEET_S600/`
