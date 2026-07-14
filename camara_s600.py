@@ -427,26 +427,29 @@ class SecurityEngine(QObject):
         self.intelligent_detection = True
         self._rknn_model = None
         self._hog_model = None
+        self.backend_name = "CPU"
         self._init_npu()
 
     def _init_npu(self):
         try:
             from rknnlite.api import RKNNLite
             self._rknn_model = RKNNLite()
-            model_path = os.path.join(APP_DIR, "assets", "yolov8n-pose_rk3588.rknn")
-            if not os.path.exists(model_path):
-                model_path = os.path.join(APP_DIR, "assets", "yolov8n_rk3588.rknn")
+            model_path = os.path.join(
+                APP_DIR, "assets", "yolov5s-640-640-rk3588.rknn")
             if os.path.exists(model_path):
                 ret = self._rknn_model.load_rknn(model_path)
                 if ret == 0 and self._rknn_model.init_runtime(
                         core_mask=RKNNLite.NPU_CORE_AUTO) == 0:
+                    self.backend_name = "NPU RK3588"
                     print("SecurityEngine: NPU RK3588 cargado para seguridad ✓")
                     return
             self._release_npu()
             self._rknn_model = None
+            self.backend_name = "CPU"
         except Exception:
             self._release_npu()
             self._rknn_model = None
+            self.backend_name = "CPU"
 
     def _release_npu(self):
         model = self._rknn_model
@@ -469,22 +472,16 @@ class SecurityEngine(QObject):
             try:
                 img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img_resized = cv2.resize(img_rgb, (640, 640))
-                outputs = self._rknn_model.inference(inputs=[img_resized])
-                if outputs and len(outputs) >= 1:
-                    data = outputs[0][0]
-                    boxes = []
-                    for i in range(data.shape[1]):
-                        score = data[4, i]
-                        if score > 0.45:
-                            cx = int(data[0, i] * w / 640)
-                            cy = int(data[1, i] * h / 640)
-                            cw = int(data[2, i] * w / 640)
-                            ch = int(data[3, i] * h / 640)
-                            boxes.append((max(0, cx - cw//2), max(0, cy - ch//2), cw, ch))
-                    if len(boxes) > 0:
-                        return boxes
+                outputs = self._rknn_model.inference(
+                    inputs=[np.expand_dims(img_resized, axis=0)],
+                    data_format=["nhwc"])
+                return self._yolov5_person_boxes(outputs, w, h)
             except Exception as e:
                 print("Error NPU en detector de seguridad:", e)
+                self._release_npu()
+                self._rknn_model = None
+                self.backend_name = "CPU"
+                self.status.emit("⚠ NPU no disponible; usando detector CPU")
 
         # 2. Fallback a detector HOG (CPU OpenCV) integrado
         if self._hog_model is None:
@@ -505,6 +502,62 @@ class SecurityEngine(QObject):
         for (bx, by, bw, bh) in boxes:
             real_boxes.append((int(bx / scale), int(by / scale), int(bw / scale), int(bh / scale)))
         return real_boxes
+
+    @staticmethod
+    def _yolov5_person_boxes(outputs, frame_w, frame_h,
+                              conf_threshold=0.35, nms_threshold=0.45):
+        """Postprocesa las tres salidas YOLOv5 de RKNN y conserva clase person=0."""
+        if not outputs or len(outputs) != 3:
+            raise ValueError("YOLOv5 RKNN debe producir tres salidas")
+        anchors = (((10, 13), (16, 30), (33, 23)),
+                   ((30, 61), (62, 45), (59, 119)),
+                   ((116, 90), (156, 198), (373, 326)))
+        candidates = []
+        for raw, scale_anchors in zip(outputs, anchors):
+            data = np.asarray(raw)
+            if data.ndim != 4:
+                raise ValueError(f"Salida YOLOv5 inesperada: {data.shape}")
+            # RKNN devuelve NCHW: (1, 255, grid_h, grid_w).
+            if data.shape[1] == 255:
+                data = data[0].reshape(3, 85, data.shape[2], data.shape[3])
+                data = data.transpose(2, 3, 0, 1)
+            # También tolerar NHWC: (1, grid_h, grid_w, 255).
+            elif data.shape[-1] == 255:
+                data = data[0].reshape(data.shape[1], data.shape[2], 3, 85)
+            else:
+                raise ValueError(f"Canales YOLOv5 inesperados: {data.shape}")
+            gh, gw = data.shape[:2]
+            for anchor_idx, (aw, ah) in enumerate(scale_anchors):
+                pred = data[:, :, anchor_idx, :]
+                score = pred[:, :, 4] * pred[:, :, 5]  # objectness * person
+                ys, xs = np.where(score >= conf_threshold)
+                for gy, gx in zip(ys, xs):
+                    px = pred[gy, gx]
+                    cx = (px[0] * 2.0 - 0.5 + gx) * (640.0 / gw)
+                    cy = (px[1] * 2.0 - 0.5 + gy) * (640.0 / gh)
+                    bw = (px[2] * 2.0) ** 2 * aw
+                    bh = (px[3] * 2.0) ** 2 * ah
+                    x1 = (cx - bw / 2.0) * frame_w / 640.0
+                    y1 = (cy - bh / 2.0) * frame_h / 640.0
+                    x2 = (cx + bw / 2.0) * frame_w / 640.0
+                    y2 = (cy + bh / 2.0) * frame_h / 640.0
+                    candidates.append((x1, y1, x2, y2, float(score[gy, gx])))
+        if not candidates:
+            return []
+        boxes = np.array([[c[0], c[1], c[2] - c[0], c[3] - c[1]]
+                          for c in candidates], dtype=np.float32)
+        scores = np.array([c[4] for c in candidates], dtype=np.float32)
+        keep = cv2.dnn.NMSBoxes(boxes.tolist(), scores.tolist(),
+                                conf_threshold, nms_threshold)
+        result = []
+        for idx in np.asarray(keep).reshape(-1):
+            x, y, bw, bh = boxes[int(idx)]
+            x = max(0, min(frame_w - 1, int(x)))
+            y = max(0, min(frame_h - 1, int(y)))
+            bw = max(1, min(frame_w - x, int(bw)))
+            bh = max(1, min(frame_h - y, int(bh)))
+            result.append((x, y, bw, bh))
+        return result
 
     # -- control de vida --
     def start(self, sensitivity=25, cooldown=10):
@@ -1178,6 +1231,10 @@ class Panel(QMainWindow):
         self.security_engine.frame_ready.connect(self._security_frame_cb)
         self.security_engine.motion_detected.connect(self._on_sec_motion)
         self.security_engine.status.connect(self._flash)
+        self.sec_npu_check.setText(
+            f"👤 Detectar personas ({self.security_engine.backend_name})")
+        self.sec_npu_check.setToolTip(
+            "Usa la NPU RK3588 cuando está disponible; si falla, usa OpenCV en CPU.")
 
         # Restaurar ajustes guardados ANTES de arrancar mpv (para usar la última resolución).
         self.settings = QSettings("BIOR", "BiroCam")
@@ -1185,6 +1242,7 @@ class Panel(QMainWindow):
         self._restore_settings()
 
         QTimer.singleShot(300, self._initial_device_setup)
+        QTimer.singleShot(700, self._recover_interrupted_conversions)
 
         # Monitor del visor: actualiza el punto de estado cada 1.5 s.
         self._mpv_timer = QTimer(self)
@@ -1872,6 +1930,17 @@ class Panel(QMainWindow):
         except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
             return False, str(exc)
 
+    @staticmethod
+    def _media_duration(path):
+        try:
+            probe = subprocess.run([
+                "/usr/bin/ffprobe", "-v", "error", "-show_entries",
+                "format=duration", "-of", "default=nw=1:nk=1", path,
+            ], capture_output=True, text=True, timeout=15, env=clean_env())
+            return float(probe.stdout.strip()) if probe.returncode == 0 else 0.0
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return 0.0
+
     # ----------------------------------------------------------------- persistencia
     def _migrate_settings(self):
         old = QSettings("CarlosOPi", "CamaraS600")
@@ -2337,6 +2406,14 @@ class Panel(QMainWindow):
         detail = ""
         if ok:
             ok, detail = self._media_is_valid(job["temp_mp4"], job["require_audio"])
+        if ok:
+            output_duration = self._media_duration(job["temp_mp4"])
+            source_duration = max(self._media_duration(job["mkv"]),
+                                  self._media_duration(job["wav"]) if job["wav"] else 0.0)
+            if source_duration > 0 and output_duration < source_duration - 1.0:
+                ok = False
+                detail = (f"MP4 truncado: {output_duration:.1f} s de "
+                          f"{source_duration:.1f} s esperados")
         if job["timestamp"] and os.path.exists(job["timestamp"]):
             os.unlink(job["timestamp"])
         if ok:
@@ -2358,6 +2435,43 @@ class Panel(QMainWindow):
     def _maybe_close_after_conversion(self):
         if getattr(self, "_close_when_finished", False) and not self._conversions:
             QTimer.singleShot(100, self.close)
+
+    def _recover_interrupted_conversions(self):
+        """Finaliza MP4 válidos que quedaron con sufijo .procesando tras un cierre."""
+        recovered = 0
+        for directory in (VIDEO_DIR, SECURITY_DIR):
+            try:
+                names = os.listdir(directory)
+            except OSError:
+                continue
+            for name in names:
+                if not name.endswith(".procesando.mp4"):
+                    continue
+                temp_mp4 = os.path.join(directory, name)
+                stem = temp_mp4.removesuffix(".procesando.mp4")
+                final_mp4 = stem + ".mp4"
+                mkv = stem + ".mkv"
+                wav = stem + ".wav"
+                require_audio = os.path.exists(wav) and os.path.getsize(wav) > 4096
+                ok, _ = self._media_is_valid(temp_mp4, require_audio)
+                if ok:
+                    output_duration = self._media_duration(temp_mp4)
+                    source_duration = max(self._media_duration(mkv),
+                                          self._media_duration(wav))
+                    ok = not (source_duration > 0
+                              and output_duration < source_duration - 1.0)
+                if not ok:
+                    continue
+                try:
+                    os.replace(temp_mp4, final_mp4)
+                    for path in (mkv, wav):
+                        if os.path.exists(path):
+                            os.unlink(path)
+                    recovered += 1
+                except OSError as exc:
+                    self._flash(f"⚠ No se pudo recuperar {name}: {exc}")
+        if recovered:
+            self._flash(f"✅ {recovered} conversión interrumpida recuperada")
 
     @staticmethod
     def _log_tail(path, lines=3):

@@ -36,29 +36,47 @@ done
     exit 1
 }
 
-echo ">> Limpiando AppDir previo…"
-rm -rf "$APPDIR"
-mkdir -p "$APPDIR/usr" "$PROJECT_DIR/dist"
-
-echo ">> Empaquetando el entorno conda con conda-pack…"
 TARBALL="$PROJECT_DIR/build/env.tar.gz"
-
-# Si conda no está en el PATH, usamos la ruta física del entorno si existe
 ENV_PATH="$REAL_HOME/miniforge3/envs/$ENV_NAME"
-if [ -d "$ENV_PATH" ]; then
-    "$CONDA_PACK" -p "$ENV_PATH" -o "$TARBALL" --force --ignore-missing-files
+
+if [ "${REUSE_APPDIR:-0}" = "1" ]; then
+    [ -x "$APPDIR/usr/bin/python3" ] || {
+        echo "ERROR: REUSE_APPDIR=1 pero el AppDir no está completo" >&2
+        exit 1
+    }
+    mkdir -p "$PROJECT_DIR/dist"
+    echo ">> Reutilizando AppDir ya extraído…"
 else
-    "$CONDA_PACK" -n "$ENV_NAME" -o "$TARBALL" --force --ignore-missing-files
+    echo ">> Limpiando AppDir previo…"
+    rm -rf "$APPDIR"
+    mkdir -p "$APPDIR/usr" "$PROJECT_DIR/dist"
+
+    echo ">> Empaquetando el entorno conda con conda-pack…"
+    # Si conda no está en el PATH, usamos la ruta física del entorno si existe
+    if [ -d "$ENV_PATH" ]; then
+        "$ENV_PATH/bin/python" -c 'from rknnlite.api import RKNNLite' || {
+            echo "ERROR: falta rknn-toolkit-lite2 en el entorno $ENV_NAME" >&2
+            exit 1
+        }
+        [ -f "$PROJECT_DIR/assets/yolov5s-640-640-rk3588.rknn" ] || {
+            echo "ERROR: falta el modelo YOLOv5 RKNN para RK3588" >&2
+            exit 1
+        }
+        "$CONDA_PACK" -p "$ENV_PATH" -o "$TARBALL" --force --quiet --ignore-missing-files
+    else
+        "$CONDA_PACK" -n "$ENV_NAME" -o "$TARBALL" --force --quiet --ignore-missing-files
+    fi
+
+    tar -xzf "$TARBALL" -C "$APPDIR/usr"
+    rm -f "$TARBALL"
+
+    echo ">> conda-unpack (corrige rutas absolutas)…"
+    "$APPDIR/usr/bin/conda-unpack" || true
 fi
-
-tar -xzf "$TARBALL" -C "$APPDIR/usr"
-rm -f "$TARBALL"
-
-echo ">> conda-unpack (corrige rutas absolutas)…"
-"$APPDIR/usr/bin/conda-unpack" || true
 
 echo ">> Copiando la app, AppRun, .desktop e iconos…"
 install -Dm644 "$PROJECT_DIR/camara_s600.py" "$APPDIR/usr/share/biro-cam/camara_s600.py"
+rm -rf "$APPDIR/usr/share/biro-cam/assets"
 cp -r "$PROJECT_DIR/assets" "$APPDIR/usr/share/biro-cam/assets"
 install -m 755 "$PACK_DIR/AppRun" "$APPDIR/AppRun"
 install -m 644 "$PACK_DIR/biro-cam.desktop" "$APPDIR/biro-cam.desktop"
@@ -130,8 +148,11 @@ echo ">> Tamaño del AppDir tras podar:"; du -sh "$APPDIR" | cut -f1
 
 echo ">> Construyendo el AppImage con appimagetool…"
 if [ -f "$OUTPUT" ]; then
-    for p in $(fuser "$OUTPUT" 2>/dev/null); do kill "$p" 2>/dev/null; done
-    sleep 1
+    USERS=$(fuser "$OUTPUT" 2>/dev/null || true)
+    if [ -n "$USERS" ]; then
+        echo "ERROR: la AppImage está en uso (PID:$USERS). Cierra B.I.O.R. Cam antes de reconstruir." >&2
+        exit 1
+    fi
 fi
 chmod +x "$APPIMAGETOOL" 2>/dev/null || true
 ARCH=aarch64 NO_APPSTREAM=1 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT" \

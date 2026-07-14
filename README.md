@@ -26,6 +26,9 @@ App de control para **cualquier webcam UVC** (diseñada para la EMEET SmartCam S
 - Temporizador de foto (3s / 10s) con cuenta atrás
 - Sonido de obturador configurable (generado como WAV, reproducido con `paplay`)
 - Modo seguridad: detección de movimiento por OpenCV, grabación automática con bitrate/configuración independiente
+- Detección de personas con YOLOv5 en la NPU RK3588 (~43 ms por inferencia), con fallback CPU
+- Soporte opcional para Xbox 360 Kinect: RGB, IR, profundidad, inclinación y LED; solo aparece si está conectado
+- Recuperación de conversiones interrumpidas y rechazo de MP4 truncados por comparación de duración
 - Overlay HUD profesional en modo seguridad: panel semi-transparente 520×340px con fuentes grandes, barra de progreso, estado y parámetros
 - Efectos de imagen (B/N, sepia, vívido, cálido, negativo)
 - Espejo, zoom digital, auto-exposición/auto-foco/auto-blancos
@@ -41,8 +44,9 @@ App de control para **cualquier webcam UVC** (diseñada para la EMEET SmartCam S
   `v4l2-ctl` en vivo.
 
 ## Empaquetado (AppImage aarch64)
-- Construir: `bash packaging/build_appimage.sh` → `dist/Biro-Cam-aarch64.AppImage` (141 MB).
-- Entorno de build: conda `biro-cam-build` (python 3.12 + PySide6 6.11.1).
+- Construir: `bash packaging/build_appimage.sh` → `dist/Biro-Cam-aarch64.AppImage` (~147 MB).
+- Entorno de build: conda `biro-cam-build` (Python 3.12, PySide6 6.11.1 y RKNNLite 2.3.2).
+- El modelo `assets/yolov5s-640-640-rk3588.rknn` va incluido en la AppImage.
 
 ## Dependencias en runtime
 - `mpv`, `v4l2-ctl` (v4l-utils) del sistema. PySide6/Python van bundleados en la AppImage.
@@ -67,8 +71,9 @@ plugin xcb necesita `libxcb-cursor.so.0`, que se bundlea en la AppImage automát
 3. Al detener, el audio se cierra con SIGINT para conservar una cabecera WAV válida.
 4. FFmpeg convierte por RKMPP a H.264/H.265 y mezcla AAC estéreo a 48 kHz.
 5. FFprobe exige vídeo, duración válida y audio cuando fue solicitado.
-6. Solo entonces el MP4 temporal sustituye al destino y se eliminan MKV/WAV.
-7. Si RKMPP está ocupado, se reintenta por software sin perder los originales.
+6. La duración final se compara con los temporales y se rechazan salidas truncadas.
+7. Solo entonces el MP4 temporal sustituye al destino y se eliminan MKV/WAV.
+8. Si RKMPP está ocupado, se reintenta por software sin perder los originales.
 
 El modo Seguridad utiliza exactamente el mismo conversor y no inicia otro codificador
 mientras el clip anterior sigue procesándose.
@@ -85,4 +90,3 @@ Las aplicaciones de cámara por defecto en Linux (como **Cheese** o **GNOME Snap
 * Delega la visualización en vivo a **mpv** mediante decodificación por **software** (`--hwdec=no`), eludiendo por completo el motor RGA del RK3588 y garantizando estabilidad absoluta en el kernel.
 * Ajusta los parámetros de hardware (foco, zoom, brillo) directamente usando llamadas a bajo nivel con `v4l2-ctl`.
 * Solo usa el codificador físico del chip (`h264_rkmpp` / `hevc_rkmpp`) para la compresión final del vídeo grabado en segundo plano, maximizando el rendimiento sin poner en riesgo la estabilidad del sistema.
-

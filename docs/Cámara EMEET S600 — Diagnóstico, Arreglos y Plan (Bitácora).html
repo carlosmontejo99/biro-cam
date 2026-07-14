@@ -847,5 +847,16 @@ lb.querySelector('.x').addEventListener('click', closeLb);
 lb.addEventListener('click', e => { if (e.target === lb) closeLb(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); });
 </script>
+<section id="actualizacion-npu-kinect">
+  <h2>Actualización 14-jul-2026 · Kinect y NPU RK3588</h2>
+  <ul>
+    <li>El selector muestra Kinect solamente cuando libfreenect detecta el hardware.</li>
+    <li>El hilo Kinect libera vídeo, profundidad, USB y contexto antes de destruirse.</li>
+    <li>Modo Seguridad usa YOLOv5 RKNN en la NPU RK3588 (~43 ms), con fallback HOG/CPU.</li>
+    <li>La AppImage incluye RKNNLite 2.3.2 y el modelo yolov5s-640-640 para RK3588.</li>
+    <li>Las conversiones interrumpidas se recuperan solo si FFprobe confirma streams y duración completa.</li>
+    <li>El build se niega a reemplazar una AppImage que continúa abierta.</li>
+  </ul>
+</section>
 </body>
 </html>

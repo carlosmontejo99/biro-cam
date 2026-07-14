@@ -17,7 +17,7 @@ Hogar canónico de TODO lo relacionado con la cámara EMEET S600 en el Orange Pi
 
 - `camara_s600.py` — **panel de control Qt/PySide6**. Lanza mpv (software, sin RGA) + IPC;
   sliders → `v4l2-ctl` en vivo. Icono en `assets/`.
-- **AppImage:** `dist/Biro-Cam-aarch64.AppImage` (141 MB) — autocontenida, va a cualquier lado.
+- **AppImage:** `dist/Biro-Cam-aarch64.AppImage` (~147 MB) — incluye PySide6, RKNNLite y YOLOv5 RK3588.
 - Lanzador en el menú: `~/.local/share/applications/camara-s600.desktop` → "Cámara S600".
 - Reconstruir: `bash packaging/build_appimage.sh` (entorno conda `camara-s600-build`).
 - Re-registrar en el menú: `bash packaging/install_desktop.sh`.
@@ -91,7 +91,7 @@ Hogar canónico de TODO lo relacionado con la cámara EMEET S600 en el Orange Pi
 - Si el codificador RKMPP no puede inicializarse, ambos modos reintentan automáticamente con
   `libx264`/`libx265` por software; así el archivo se conserva sin depender del estado de MPP.
 
-_Última actualización: 2026-06-21_
+_Última actualización: 2026-07-14_
 
 ## Corrección v2.3 · 21-jun-2026
 
@@ -140,4 +140,11 @@ _Última actualización: 2026-06-21_
 
 - **Solución a grabaciones a 1080p 60fps aceleradas (250 FPS):** Se fuerza la tasa de fotogramas del vídeo de salida (`-r <fps>`) durante la conversión de FFmpeg, obteniendo el valor exacto de la resolución activa seleccionada (por ejemplo, 60 FPS para 1080p/720p o 30 FPS para 4K). Esto evita que FFmpeg interprete incorrectamente la tasa de cuadros de los paquetes MJPEG de mpv y prevenga el efecto de cámara rápida y desincronización de audio.
 
+## Actualización Kinect + NPU · 14-jul-2026
+
+- Kinect solo aparece cuando `libfreenect` detecta el dispositivo físico; apagado seguro del hilo/libusb.
+- Seguridad detecta personas con YOLOv5 en la NPU RK3588 y cae a HOG/CPU si el runtime falla.
+- AppImage incluye RKNNLite 2.3.2 y el modelo RKNN validado sobre hardware real.
+- Se recuperan conversiones interrumpidas y se rechazan MP4 cuya duración resulte truncada.
+- El constructor ya no cierra una AppImage que se encuentre en ejecución.
 
