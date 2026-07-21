@@ -1,4 +1,4 @@
-# B.I.O.R. Cam v2.9 — Cámara 4K, seguridad NPU y Kinect para RK3588
+# B.I.O.R. Cam v2.10.0 — EMEET S600 en RK3588 y x86_64/Bazzite
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21304061.svg)](https://doi.org/10.5281/zenodo.21304061)
 
@@ -7,6 +7,15 @@ Aplicación de control y grabación para cámaras UVC en Linux, diseñada para l
 EMEET SmartCam S600. Funciona en Orange Pi 5 Max (RK3588) y equipos x86_64 como
 Bazzite; ofrece aceleración NPU en Rockchip, fallback CPU y soporte opcional para
 Xbox 360 Kinect.
+
+## Novedades de v2.10.0
+- Nuevo AppImage x86_64 compatible con Bazzite y laptops ASUS ROG.
+- Selector automático de todas las cámaras V4L2: integrada, infrarroja, EMEET
+  y otras USB, excluyendo nodos metadata y dispositivos que solo son salida.
+- Resolución, FPS y formato adaptados a las capacidades reales de cada cámara.
+- Selección automática de RKMPP en Rockchip y `libx264`/`libx265` en x86_64.
+- Detección de `mpv` nativo o Flatpak para usar un backend X11 compatible.
+- Builds automáticos y validados para aarch64 y x86_64 mediante GitHub Actions.
 
 > 📍 **Hogar único del proyecto:**
 > `~/Documentos/B.I.O.R./5. PROJECTS/CAMARA_EMEET_S600/`
@@ -53,13 +62,14 @@ Xbox 360 Kinect.
   `uname -m` y produce `dist/Biro-Cam-aarch64.AppImage` o
   `dist/Biro-Cam-x86_64.AppImage`.
 - Las etiquetas `v*` de GitHub construyen y adjuntan ambas arquitecturas al Release.
-- Entorno de build: conda `biro-cam-build` (Python 3.12, PySide6, OpenCV y mpv);
+- Entorno de build: conda `biro-cam-build` (Python 3.12, PySide6 y OpenCV);
   la variante ARM puede incluir además RKNNLite.
 - El modelo RKNN solo se usa en RK3588; x86_64 selecciona OpenCV/CPU.
 
 ## Dependencias en runtime
-- `v4l2-ctl` (v4l-utils) y FFmpeg del sistema. PySide6/Python van bundleados;
-  el empaquetado de GitHub también incluye `mpv`.
+- `v4l2-ctl` (v4l-utils), FFmpeg y mpv del sistema. En Bazzite también se
+  detecta automáticamente `io.mpv.Mpv` instalado desde Flatpak. PySide6/Python
+  van bundleados.
 
 ## Vídeo incrustado
 La cámara se muestra DENTRO de la ventana (mpv embebido con `--wid`). Requiere X11, así que
