@@ -858,5 +858,30 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); }
     <li>El build se niega a reemplazar una AppImage que continúa abierta.</li>
   </ul>
 </section>
+<section id="v2-10-multicamara">
+  <h2>Actualización v2.10.0: RK3588 y x86_64</h2>
+  <p>La aplicación dispone de AppImages independientes para aarch64/Rockchip y
+  x86_64/Bazzite. Enumera las cámaras V4L2 de captura y ofrece sus modos reales,
+  incluyendo la cámara RGB y el sensor infrarrojo integrados del ASUS ROG.</p>
+  <ul>
+    <li>RKMPP/RKNN se conservan en Orange Pi; x86_64 utiliza libx264/libx265.</li>
+    <li>Reset usa los valores nativos de cada dispositivo.</li>
+    <li>Poca luz limita brillo, gamma y ganancia según los rangos de la cámara.</li>
+    <li>Al regresar de IR a RGB se espera la estabilización física de la
+    autoexposición y se ocultan los cuadros negros iniciales.</li>
+  </ul>
+</section>
+<section id="evaluacion-impacto">
+  <h2>Evaluación del nivel e impacto del proyecto</h2>
+  <p>B.I.O.R. Cam v2.9 se considera un proyecto de nivel intermedio-avanzado, con áreas
+  cercanas a ingeniería profesional aplicada. Integra Linux ARM64, PySide6, multimedia,
+  concurrencia, USB/libfreenect, NPU RK3588, validación audiovisual y AppImage.</p>
+  <p>Su valor diferencial es resolver de forma práctica problemas que cruzan hardware,
+  kernel, Python, C, vídeo, audio e IA local. Puede evolucionar hacia vigilancia privada,
+  adquisición RGB/IR/profundidad, robótica, automatización o instrumentación de laboratorio.</p>
+  <p>La evaluación completa, incluyendo nivel por área, impacto, valor para portafolio y
+  trabajo necesario para llegar a producto industrial, se conserva en
+  <code>docs/EVALUACION_E_IMPACTO_BIOR_CAM_v2.9.md</code>.</p>
+</section>
 </body>
 </html>
