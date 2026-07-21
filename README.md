@@ -13,6 +13,8 @@ Xbox 360 Kinect.
 - Selector automático de todas las cámaras V4L2: integrada, infrarroja, EMEET
   y otras USB, excluyendo nodos metadata y dispositivos que solo son salida.
 - Resolución, FPS y formato adaptados a las capacidades reales de cada cámara.
+- `Reset` restaura los valores nativos del dispositivo y `Poca luz` se adapta a
+  sus rangos, evitando aplicar a la cámara integrada los ajustes de la EMEET.
 - Selección automática de RKMPP en Rockchip y `libx264`/`libx265` en x86_64.
 - Detección de `mpv` nativo o Flatpak para usar un backend X11 compatible.
 - Builds automáticos y validados para aarch64 y x86_64 mediante GitHub Actions.

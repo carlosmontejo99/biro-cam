@@ -2701,9 +2701,27 @@ class Panel(QMainWindow):
         self._flash(f"🎞 Resolución: {label}")
 
     def preset_lowlight(self):
-        """Sube ganancia/brillo/gamma para ambientes oscuros (tu cuarto rojo)."""
-        settings = {"gain": 100, "brightness": 60, "gamma": 320,
-                    "contrast": 50, "saturation": 90}
+        """Aclara sombras sin quemar la imagen, respetando cada cámara."""
+        details = v4l2_control_details()
+        is_emeet = "emeet" in self.dev_combo.currentText().lower()
+        settings = {}
+        for cid in ("brightness", "contrast", "saturation", "gamma", "gain", "sharpness"):
+            if cid not in details:
+                continue
+            lo, hi, _, default, _ = details[cid]
+            if is_emeet:
+                emeet_values = {"gain": 100, "brightness": 60, "gamma": 320,
+                                "contrast": 50, "saturation": 90, "sharpness": 32}
+                value = emeet_values.get(cid, default)
+            elif cid == "brightness":
+                value = default + round((hi - default) * 0.15)
+            elif cid == "gamma":
+                value = default + round((hi - default) * 0.10)
+            elif cid == "gain":
+                value = default + round((hi - default) * 0.20)
+            else:
+                value = default
+            settings[cid] = max(lo, min(hi, value))
         for c, v in settings.items():
             v4l2_set(c, v)
             if c in self.sliders:
@@ -2711,11 +2729,14 @@ class Panel(QMainWindow):
                 self.sliders[c].setValue(v)
                 self.value_labels[c].setText(str(v))
                 self.sliders[c].blockSignals(False)
-        v4l2_set("auto_exposure", 3)  # deja que exponga al máximo
-        self._flash("🌙 Modo poca luz aplicado")
+        v4l2_set("auto_exposure", 3)
+        self._save_camera_controls()
+        self._flash("🌙 Poca luz suave aplicada")
 
     def preset_reset(self):
-        for cid, _, _, _, default in CONTROLS:
+        details = v4l2_control_details()
+        for cid, _, _, _, fallback in CONTROLS:
+            default = details.get(cid, (0, 0, 1, fallback, fallback))[3]
             v4l2_set(cid, default)
             self.sliders[cid].blockSignals(True)
             self.sliders[cid].setValue(default)
@@ -2732,7 +2753,8 @@ class Panel(QMainWindow):
         self.fx_combo.setCurrentIndex(0)
         self.grid_combo.setCurrentIndex(0)
         self._apply_vf()
-        self._flash("↺ Ajustes restablecidos")
+        self._save_camera_controls()
+        self._flash("↺ Valores nativos de la cámara restaurados")
 
     # ----------------------------------------------------------------- seguridad
     def _toggle_security(self):
