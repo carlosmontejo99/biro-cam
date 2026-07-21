@@ -1,5 +1,5 @@
 #!/bin/bash
-# Construye Biro-Cam-aarch64.AppImage desde el entorno conda 'biro-cam-build'.
+# Construye el AppImage para la arquitectura nativa (aarch64 o x86_64).
 #
 # Requisitos (ya hechos):
 #   mamba create -n biro-cam-build python=3.12
@@ -15,10 +15,17 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "${0}")/.." && pwd)"
 PACK_DIR="$PROJECT_DIR/packaging"
-ENV_NAME="biro-cam-build"
+ENV_NAME="${ENV_NAME:-biro-cam-build}"
 APPDIR="$PROJECT_DIR/build/BiroCam.AppDir"
-APPIMAGETOOL="${APPIMAGETOOL:-$REAL_HOME/.cache/the_curator/appimagetool-aarch64.AppImage}"
-OUTPUT="$PROJECT_DIR/dist/Biro-Cam-aarch64.AppImage"
+TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
+case "$TARGET_ARCH" in
+    arm64) TARGET_ARCH="aarch64" ;;
+    amd64) TARGET_ARCH="x86_64" ;;
+    aarch64|x86_64) ;;
+    *) echo "ERROR: arquitectura no soportada: $TARGET_ARCH" >&2; exit 1 ;;
+esac
+APPIMAGETOOL="${APPIMAGETOOL:-$REAL_HOME/.cache/the_curator/appimagetool-$TARGET_ARCH.AppImage}"
+OUTPUT="$PROJECT_DIR/dist/Biro-Cam-$TARGET_ARCH.AppImage"
 CONDA_PACK="${CONDA_PACK:-$REAL_HOME/miniforge3/bin/conda-pack}"
 
 for cmd in tar install find; do
@@ -54,14 +61,16 @@ else
     echo ">> Empaquetando el entorno conda con conda-pack…"
     # Si conda no está en el PATH, usamos la ruta física del entorno si existe
     if [ -d "$ENV_PATH" ]; then
-        "$ENV_PATH/bin/python" -c 'from rknnlite.api import RKNNLite' || {
-            echo "ERROR: falta rknn-toolkit-lite2 en el entorno $ENV_NAME" >&2
-            exit 1
-        }
-        [ -f "$PROJECT_DIR/assets/yolov5s-640-640-rk3588.rknn" ] || {
-            echo "ERROR: falta el modelo YOLOv5 RKNN para RK3588" >&2
-            exit 1
-        }
+        if [ "$TARGET_ARCH" = "aarch64" ]; then
+            "$ENV_PATH/bin/python" -c 'from rknnlite.api import RKNNLite' || {
+                echo "ERROR: falta rknn-toolkit-lite2 en el entorno $ENV_NAME" >&2
+                exit 1
+            }
+            [ -f "$PROJECT_DIR/assets/yolov5s-640-640-rk3588.rknn" ] || {
+                echo "ERROR: falta el modelo YOLOv5 RKNN para RK3588" >&2
+                exit 1
+            }
+        fi
         "$CONDA_PACK" -p "$ENV_PATH" -o "$TARBALL" --force --quiet --ignore-missing-files
     else
         "$CONDA_PACK" -n "$ENV_NAME" -o "$TARBALL" --force --quiet --ignore-missing-files
@@ -155,8 +164,8 @@ if [ -f "$OUTPUT" ]; then
     fi
 fi
 chmod +x "$APPIMAGETOOL" 2>/dev/null || true
-ARCH=aarch64 NO_APPSTREAM=1 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT" \
-    || ARCH=aarch64 NO_APPSTREAM=1 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$OUTPUT"
+ARCH="$TARGET_ARCH" NO_APPSTREAM=1 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT" \
+    || ARCH="$TARGET_ARCH" NO_APPSTREAM=1 "$APPIMAGETOOL" --appimage-extract-and-run "$APPDIR" "$OUTPUT"
 
 echo ">> Listo: $OUTPUT"
 ls -lh "$OUTPUT"

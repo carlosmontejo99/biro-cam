@@ -3,11 +3,14 @@
 # Crea el lanzador .desktop apuntando al AppImage y registra el icono.
 #
 # Uso:   bash packaging/install_desktop.sh [ruta/al/AppImage]
-# Por defecto usa dist/Biro-Cam-aarch64.AppImage del proyecto.
+# Por defecto usa el AppImage correspondiente a la arquitectura del equipo.
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${0}")/.." && pwd)"
-APPIMAGE="${1:-$PROJECT_DIR/dist/Biro-Cam-aarch64.AppImage}"
+MACHINE="$(uname -m)"
+[ "$MACHINE" = "arm64" ] && MACHINE="aarch64"
+[ "$MACHINE" = "amd64" ] && MACHINE="x86_64"
+APPIMAGE="${1:-$PROJECT_DIR/dist/Biro-Cam-$MACHINE.AppImage}"
 
 if [ ! -f "$APPIMAGE" ]; then
     echo "No se encontró el AppImage: $APPIMAGE" >&2
@@ -21,7 +24,11 @@ ICON_DIR="$HOME/.local/share/icons/hicolor"
 mkdir -p "$APPS_DIR" "$ICON_DIR/256x256/apps" "$ICON_DIR/scalable/apps"
 
 install -m 644 "$PROJECT_DIR/assets/biro-cam-256.png" "$ICON_DIR/256x256/apps/biro-cam.png"
-install -m 644 "$PROJECT_DIR/assets/icon.svg" "$ICON_DIR/scalable/apps/biro-cam.svg"
+if [ -w "$ICON_DIR/scalable/apps" ]; then
+    install -m 644 "$PROJECT_DIR/assets/icon.svg" "$ICON_DIR/scalable/apps/biro-cam.svg"
+else
+    echo "Aviso: no se pudo actualizar el icono SVG; se usará el icono PNG." >&2
+fi
 
 cat > "$APPS_DIR/biro-cam.desktop" <<EOF
 [Desktop Entry]

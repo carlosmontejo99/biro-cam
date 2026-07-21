@@ -17,6 +17,7 @@ import array
 import json
 import math
 import os
+import platform
 import signal
 import socket
 import struct
@@ -83,8 +84,40 @@ def clean_env(env=None):
 
 ICON_PATH = os.path.join(APP_DIR, "assets", "icon_256.png")
 SHUTTER_SOUND = os.path.join(os.path.expanduser("~/.cache/biro-cam"), "shutter.wav")
-DEV       = "/dev/video0"
-CAM_URL   = "av://v4l2:/dev/video0"
+def detect_camera_device():
+    """Encuentra la interfaz de captura de la EMEET y evita nodos metadata."""
+    by_id = "/dev/v4l/by-id"
+    try:
+        links = sorted(os.listdir(by_id))
+        preferred = [name for name in links
+                     if "emeet" in name.lower() and "video-index0" in name.lower()]
+        preferred += [name for name in links
+                      if "emeet" in name.lower() and name not in preferred]
+        for name in preferred:
+            path = os.path.realpath(os.path.join(by_id, name))
+            if os.path.exists(path):
+                return path
+    except OSError:
+        pass
+
+    for index in range(16):
+        path = f"/dev/video{index}"
+        if not os.path.exists(path):
+            continue
+        try:
+            result = subprocess.run(
+                ["v4l2-ctl", "-d", path, "--info"], capture_output=True,
+                text=True, timeout=2, env=clean_env())
+            info = (result.stdout + result.stderr).lower()
+            if "emeet" in info and "metadata" not in info:
+                return path
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return "/dev/video0"
+
+
+DEV       = detect_camera_device()
+CAM_URL   = f"av://v4l2:{DEV}"
 IPC_SOCK  = "/tmp/mpv-biro-cam.sock"
 PHOTO_DIR = os.path.expanduser("~/Imágenes/Camera")
 VIDEO_DIR = os.path.expanduser("~/Vídeos/Camera")
@@ -144,11 +177,16 @@ REC_DURATIONS = [
     ("60 min", 60),
 ]
 
-# Códecs de vídeo para grabación
-CODECS = [
-    ("H.264 (compatible)", "h264_rkmpp"),
-    ("H.265 (más compacto)", "hevc_rkmpp"),
-]
+# RKMPP solo existe en equipos Rockchip. En PC, los codificadores software son
+# más universales y no dependen de que la GPU dedicada esté activa.
+IS_ROCKCHIP = platform.machine().lower() in ("aarch64", "arm64")
+CODECS = ([
+    ("H.264 (RKMPP)", "h264_rkmpp"),
+    ("H.265 (RKMPP)", "hevc_rkmpp"),
+] if IS_ROCKCHIP else [
+    ("H.264 (compatible)", "libx264"),
+    ("H.265 (más compacto)", "libx265"),
+])
 
 
 def timestamp_filter(prefix: str):
@@ -2101,7 +2139,9 @@ class Panel(QMainWindow):
         w, h, fps, _ = RESOLUTIONS[self.res_combo.currentIndex()]
         wid = int(self.video.winId())   # ID de ventana nativa del widget de vídeo
         args = [
-            "mpv", CAM_URL,
+            os.path.join(os.path.dirname(sys.executable), "mpv")
+            if os.path.exists(os.path.join(os.path.dirname(sys.executable), "mpv"))
+            else "mpv", CAM_URL,
             f"--wid={wid}",                       # render DENTRO de la app
             f"--input-ipc-server={IPC_SOCK}",
             "--no-config",                        # aislado de ~/.config/mpv (sin lua/HUD)
@@ -2131,7 +2171,7 @@ class Panel(QMainWindow):
             QTimer.singleShot(2500, lambda: setattr(self, "_started", True))
             QTimer.singleShot(3000, self._apply_auto_settings)
         except FileNotFoundError:
-            self._flash("ERROR: mpv no está instalado")
+            self._flash("ERROR: mpv no está instalado ni incluido en la AppImage")
 
     def take_photo(self):
         if self._photo_timer_active:
@@ -2322,7 +2362,7 @@ class Panel(QMainWindow):
         temp_mp4 = os.path.splitext(mkv)[0] + ".procesando.mp4"
         fx = getattr(self, "_rec_effect", "")
         ts_enabled = getattr(self, "_rec_timestamp", False)
-        codec = getattr(self, "_rec_codec", "h264_rkmpp")
+        codec = getattr(self, "_rec_codec", CODECS[0][1])
         timestamp_file = ""
         filters = []
         if fx:
@@ -2487,7 +2527,7 @@ class Panel(QMainWindow):
     _rec_effect = ""
     _rec_bitrate = 6
     _rec_timestamp = False
-    _rec_codec = "h264_rkmpp"
+    _rec_codec = CODECS[0][1]
     _rec_max_duration = 0
     _audio_offset = 0.0
 
