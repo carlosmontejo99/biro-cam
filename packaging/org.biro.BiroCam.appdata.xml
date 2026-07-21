@@ -4,10 +4,10 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>B.I.O.R. Cam</name>
-  <summary>Control panel and recorder for USB webcams on Orange Pi 5 Max</summary>
+  <summary>Control panel and recorder for USB webcams on Linux</summary>
   <description>
     <p>
-      B.I.O.R. Cam is a lightweight control panel and video recorder designed for USB webcams (optimized for EMEET SmartCam S600) on Single Board Computers like the Orange Pi 5 Max (RK3588).
+      B.I.O.R. Cam is a lightweight control panel and video recorder designed for USB webcams (optimized for EMEET SmartCam S600) on Orange Pi 5 Max (RK3588) and x86_64 Linux computers.
     </p>
     <p>
       Standard Linux camera apps (like Cheese or GNOME Snapshot) often fail to capture high-resolution streams from webcams because they attempt to request uncompressed YUV raw streams, which saturate the USB bandwidth, or because their hardware-accelerated GStreamer pipelines trigger the Rockchip RK3588 RGA MMU bug on systems with more than 4GB of RAM, crashing the kernel.
@@ -25,5 +25,13 @@
   <url type="homepage">https://github.com/carlosmontejo99/biro-cam</url>
   <provides>
     <binary>Biro-Cam-aarch64.AppImage</binary>
+    <binary>Biro-Cam-x86_64.AppImage</binary>
   </provides>
+  <releases>
+    <release version="2.10.0" date="2026-07-21">
+      <description>
+        <p>Adds an x86_64 AppImage for Bazzite, automatic EMEET device detection, architecture-specific video codecs, bundled mpv, and dual-architecture CI builds.</p>
+      </description>
+    </release>
+  </releases>
 </component>

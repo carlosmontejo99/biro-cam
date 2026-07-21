@@ -1,4 +1,4 @@
-# B.I.O.R. Cam v2.9 — Cámara 4K, seguridad NPU y Kinect para RK3588
+# B.I.O.R. Cam v2.10.0 — EMEET S600 en RK3588 y x86_64/Bazzite
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21304061.svg)](https://doi.org/10.5281/zenodo.21304061)
 
@@ -7,6 +7,13 @@ Aplicación de control y grabación para cámaras UVC en Linux, diseñada para l
 EMEET SmartCam S600. Funciona en Orange Pi 5 Max (RK3588) y equipos x86_64 como
 Bazzite; ofrece aceleración NPU en Rockchip, fallback CPU y soporte opcional para
 Xbox 360 Kinect.
+
+## Novedades de v2.10.0
+- Nuevo AppImage x86_64 compatible con Bazzite y laptops ASUS ROG.
+- Detección automática de la EMEET S600 aunque cambie su nodo `/dev/video*`.
+- Selección automática de RKMPP en Rockchip y `libx264`/`libx265` en x86_64.
+- `mpv` incluido en el bundle para reducir dependencias externas.
+- Builds automáticos y validados para aarch64 y x86_64 mediante GitHub Actions.
 
 > 📍 **Hogar único del proyecto:**
 > `~/Documentos/B.I.O.R./5. PROJECTS/CAMARA_EMEET_S600/`
