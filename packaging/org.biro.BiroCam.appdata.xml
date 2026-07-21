@@ -30,7 +30,7 @@
   <releases>
     <release version="2.10.0" date="2026-07-21">
       <description>
-        <p>Adds an x86_64 AppImage for Bazzite, automatic EMEET device detection, architecture-specific video codecs, bundled mpv, and dual-architecture CI builds.</p>
+        <p>Adds an x86_64 AppImage for Bazzite, automatic selection and mode detection for integrated, infrared and USB cameras, architecture-specific video codecs, native or Flatpak mpv discovery, and dual-architecture CI builds.</p>
       </description>
     </release>
   </releases>

@@ -44,7 +44,7 @@ jobs:
 
       - name: Create Conda environment
         run: |
-          $HOME/miniforge3/bin/conda create -y -n biro-cam-build -c conda-forge python=3.12 mpv
+          $HOME/miniforge3/bin/conda create -y -n biro-cam-build -c conda-forge python=3.12
           PYTHONNOUSERSITE=1 $HOME/miniforge3/envs/biro-cam-build/bin/pip install PySide6 opencv-python numpy
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
             PYTHONNOUSERSITE=1 $HOME/miniforge3/envs/biro-cam-build/bin/pip install rknn-toolkit-lite2

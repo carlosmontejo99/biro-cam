@@ -18,6 +18,8 @@ import json
 import math
 import os
 import platform
+import re
+import shutil
 import signal
 import socket
 import struct
@@ -82,42 +84,123 @@ def clean_env(env=None):
         env.pop("LD_LIBRARY_PATH", None)
     return env
 
+
+def mpv_executable():
+    """Prefiere un mpv del host con X11; Conda puede carecer de ese backend."""
+    system_mpv = shutil.which("mpv")
+    if system_mpv:
+        return system_mpv
+    for path in (
+            "/var/lib/flatpak/exports/bin/io.mpv.Mpv",
+            os.path.expanduser("~/.local/share/flatpak/exports/bin/io.mpv.Mpv")):
+        if os.path.exists(path) and os.access(path, os.X_OK):
+            return path
+    bundled = os.path.join(os.path.dirname(sys.executable), "mpv")
+    return bundled if os.path.exists(bundled) else "mpv"
+
 ICON_PATH = os.path.join(APP_DIR, "assets", "icon_256.png")
 SHUTTER_SOUND = os.path.join(os.path.expanduser("~/.cache/biro-cam"), "shutter.wav")
-def detect_camera_device():
-    """Encuentra la interfaz de captura de la EMEET y evita nodos metadata."""
-    by_id = "/dev/v4l/by-id"
+
+
+def _v4l2_output(device, *args):
     try:
-        links = sorted(os.listdir(by_id))
-        preferred = [name for name in links
-                     if "emeet" in name.lower() and "video-index0" in name.lower()]
-        preferred += [name for name in links
-                      if "emeet" in name.lower() and name not in preferred]
-        for name in preferred:
-            path = os.path.realpath(os.path.join(by_id, name))
-            if os.path.exists(path):
-                return path
-    except OSError:
-        pass
+        result = subprocess.run(
+            ["v4l2-ctl", "-d", device, *args], capture_output=True,
+            text=True, timeout=3, env=clean_env())
+        return result.stdout + result.stderr
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
-    for index in range(16):
-        path = f"/dev/video{index}"
-        if not os.path.exists(path):
-            continue
+
+def list_camera_devices():
+    """Devuelve solo nodos capaces de capturar imagen, con una ruta estable."""
+    stable_paths = {}
+    for directory in ("/dev/v4l/by-id", "/dev/v4l/by-path"):
         try:
-            result = subprocess.run(
-                ["v4l2-ctl", "-d", path, "--info"], capture_output=True,
-                text=True, timeout=2, env=clean_env())
-            info = (result.stdout + result.stderr).lower()
-            if "emeet" in info and "metadata" not in info:
-                return path
-        except (OSError, subprocess.SubprocessError):
+            for name in sorted(os.listdir(directory)):
+                if "video-index0" not in name:
+                    continue
+                link = os.path.join(directory, name)
+                real = os.path.realpath(link)
+                if os.path.exists(real):
+                    stable_paths.setdefault(real, link)
+        except OSError:
+            pass
+
+    cameras = []
+    for index in range(32):
+        real = f"/dev/video{index}"
+        if not os.path.exists(real):
             continue
-    return "/dev/video0"
+        info = _v4l2_output(real, "--all")
+        device_caps = info.split("Device Caps", 1)[-1]
+        device_caps = re.split(
+            r"\n(?:Media Driver Info|Priority|Video input|Format )",
+            device_caps, maxsplit=1)[0]
+        if "Video Capture" not in device_caps:
+            continue
+        card_match = re.search(r"Card type\s*:\s*(.+)", info)
+        label = card_match.group(1).strip() if card_match else f"Cámara {index + 1}"
+        path = stable_paths.get(real, real)
+        cameras.append((path, label, real))
+
+    cameras.sort(key=lambda item: (
+        0 if "emeet" in item[1].lower() else 1,
+        1 if "infrared" in item[1].lower() or item[1].rstrip().endswith(" I") else 0,
+        item[1].lower(), item[2]))
+    return cameras
 
 
-DEV       = detect_camera_device()
-CAM_URL   = f"av://v4l2:{DEV}"
+DEFAULT_RESOLUTIONS = [
+    (3840, 2160, 30, "4K · 30"),
+    (2560, 1440, 30, "1440p · 30"),
+    (1920, 1080, 60, "1080p · 60"),
+    (1280,  720, 60, "720p · 60"),
+    ( 640,  480, 30, "480p · 30"),
+]
+
+
+def camera_modes(device):
+    """Detecta el mejor formato y las resoluciones reales de una cámara V4L2."""
+    output = _v4l2_output(device, "--list-formats-ext")
+    formats = {}
+    current = None
+    current_size = None
+    for line in output.splitlines():
+        fmt = re.search(r"\[\d+\]:\s+'([^']+)'", line)
+        if fmt:
+            current = fmt.group(1)
+            formats.setdefault(current, {})
+            current_size = None
+            continue
+        size = re.search(r"Size:\s+Discrete\s+(\d+)x(\d+)", line)
+        if size and current:
+            current_size = (int(size.group(1)), int(size.group(2)))
+            formats[current].setdefault(current_size, [])
+            continue
+        fps = re.search(r"\((\d+(?:\.\d+)?)\s+fps\)", line, re.IGNORECASE)
+        if fps and current and current_size:
+            formats[current][current_size].append(max(1, round(float(fps.group(1)))))
+
+    selected = next((fmt for fmt in ("MJPG", "YUYV", "GREY") if fmt in formats), None)
+    if not selected and formats:
+        selected = next(iter(formats))
+    input_formats = {"MJPG": "mjpeg", "YUYV": "yuyv422", "GREY": "gray"}
+    input_format = input_formats.get(selected, selected.lower() if selected else "mjpeg")
+    modes = []
+    for (width, height), rates in formats.get(selected, {}).items():
+        fps = max(rates) if rates else 30
+        label = (f"4K · {fps}" if (width, height) == (3840, 2160)
+                 else f"{height}p · {fps}")
+        modes.append((width, height, fps, label))
+    modes.sort(key=lambda mode: (mode[0] * mode[1], mode[2]), reverse=True)
+    return (modes or list(DEFAULT_RESOLUTIONS)), input_format
+
+
+CAMERAS = list_camera_devices()
+DEV = CAMERAS[0][0] if CAMERAS else ""
+CAM_URL = f"av://v4l2:{DEV}" if DEV else ""
+RESOLUTIONS, CAM_INPUT_FORMAT = camera_modes(DEV) if DEV else (list(DEFAULT_RESOLUTIONS), "mjpeg")
 IPC_SOCK  = "/tmp/mpv-biro-cam.sock"
 PHOTO_DIR = os.path.expanduser("~/Imágenes/Camera")
 VIDEO_DIR = os.path.expanduser("~/Vídeos/Camera")
@@ -125,15 +208,6 @@ SECURITY_DIR = os.path.join(VIDEO_DIR, "Seguridad")
 RUNTIME_DIR = os.path.expanduser("~/.cache/biro-cam")
 SECURITY_FRAMES = ("/tmp/biro-cam-security-frame-a.jpg",
                    "/tmp/biro-cam-security-frame-b.jpg")
-
-# Resoluciones MJPEG soportadas por la S600 (ancho, alto, fps, etiqueta)
-RESOLUTIONS = [
-    (3840, 2160, 30, "4K · 30"),
-    (2560, 1440, 30, "1440p · 30"),
-    (1920, 1080, 60, "1080p · 60"),
-    (1280,  720, 60, "720p · 60"),
-    ( 640,  480, 30, "480p · 30"),
-]
 
 # Controles v4l2: (id, etiqueta, min, max, default)
 CONTROLS = [
@@ -225,6 +299,22 @@ def v4l2_get(ctrl: str):
         return int(out.split(":")[1])
     except Exception:
         return None
+
+
+def v4l2_control_details(device=None):
+    """Obtiene rango, valor y predeterminado de los controles de una cámara."""
+    details = {}
+    output = _v4l2_output(device or DEV, "--list-ctrls")
+    pattern = re.compile(
+        r"^\s*(\w+)\s+0x[0-9a-f]+\s+\([^)]*\)\s*:\s*"
+        r".*?min=(-?\d+)\s+max=(-?\d+)\s+step=(-?\d+)\s+"
+        r"default=(-?\d+)\s+value=(-?\d+)")
+    for line in output.splitlines():
+        match = pattern.search(line)
+        if match:
+            name, lo, hi, step, default, value = match.groups()
+            details[name] = tuple(map(int, (lo, hi, step, default, value)))
+    return details
 
 
 def list_mics():
@@ -827,7 +917,11 @@ class Panel(QMainWindow):
         dev_select_lay.setContentsMargins(0, 0, 0, 4)
         dev_select_lay.addWidget(QLabel("Dispositivo:"))
         self.dev_combo = QComboBox()
-        self.dev_combo.addItem("🎥 EMEET SmartCam S600", "emeet")
+        for path, label, real in CAMERAS:
+            suffix = f" ({real})" if real not in label else ""
+            self.dev_combo.addItem(f"🎥 {label}{suffix}", path)
+        if not CAMERAS:
+            self.dev_combo.addItem("⚠ No se detectaron cámaras", "")
         if check_kinect_connected():
             self.dev_combo.addItem("🛡️ Xbox 360 Kinect", "kinect")
         self.dev_combo.currentIndexChanged.connect(self._on_device_changed)
@@ -980,12 +1074,15 @@ class Panel(QMainWindow):
         grid.setVerticalSpacing(6)
         self.sliders = {}
         self.value_labels = {}
+        control_details = v4l2_control_details()
         for row, (cid, label, lo, hi, default) in enumerate(CONTROLS):
             grid.addWidget(QLabel(label), row, 0)
+            current = v4l2_get(cid)
+            if cid in control_details:
+                lo, hi, _, default, current = control_details[cid]
             sld = QSlider(Qt.Horizontal)
             sld.setRange(lo, hi)
-            cur = v4l2_get(cid)
-            sld.setValue(cur if cur is not None else default)
+            sld.setValue(current if current is not None else default)
             vlab = QLabel(str(sld.value()))
             vlab.setMinimumWidth(40)
             vlab.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -1303,6 +1400,7 @@ class Panel(QMainWindow):
 
     # ----------------------------------------------------------------- Métodos de Kinect
     def _on_device_changed(self, idx):
+        global DEV, CAM_URL, RESOLUTIONS, CAM_INPUT_FORMAT
         dev_type = self.dev_combo.currentData()
         if dev_type == "kinect":
             self._flash("Cambiando a Kinect...")
@@ -1326,14 +1424,41 @@ class Panel(QMainWindow):
             # Iniciar captura
             self._start_kinect()
         else:
-            self._flash("Cambiando a EMEET...")
+            if not dev_type:
+                self._flash("⚠ No se detectó ninguna cámara de captura")
+                return
+            if hasattr(self, "settings") and DEV:
+                self._save_camera_controls()
+            DEV = str(dev_type)
+            CAM_URL = f"av://v4l2:{DEV}"
+            RESOLUTIONS, CAM_INPUT_FORMAT = camera_modes(DEV)
+            for combo in (self.res_combo, self.sec_res_combo):
+                combo.blockSignals(True)
+                combo.clear()
+                for _, _, _, label in RESOLUTIONS:
+                    combo.addItem(label)
+                combo.setCurrentIndex(0)
+                combo.blockSignals(False)
+
+            camera_name = self.dev_combo.currentText().removeprefix("🎥 ")
+            self._flash(f"Cambiando a {camera_name}...")
             self._stop_kinect()
             self.kinect_label.hide()
             self.kinect_panel.hide()
 
+            if self.mpv_proc and self.mpv_proc.poll() is None:
+                mpv_ipc(["quit"])
+                try:
+                    self.mpv_proc.wait(timeout=1.5)
+                except Exception:
+                    self.mpv_proc.terminate()
+            self.mpv_proc = None
+
             # Mostrar controles EMEET
             for w in self.emeet_widgets:
                 w.show()
+
+            self._load_camera_controls()
 
             # Lanzar visor
             self.launch_mpv()
@@ -1990,16 +2115,54 @@ class Panel(QMainWindow):
                 old.clear()
                 self._flash("↩ Ajustes migrados de versión anterior")
 
+    @staticmethod
+    def _camera_settings_id(device=None):
+        path = str(device or DEV or "none")
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", path).strip("_")
+
+    def _save_camera_controls(self):
+        if not DEV or not hasattr(self, "settings"):
+            return
+        prefix = f"camera/{self._camera_settings_id()}/ctl"
+        for cid, slider in self.sliders.items():
+            self.settings.setValue(f"{prefix}/{cid}", slider.value())
+
+    def _load_camera_controls(self):
+        if not DEV or not hasattr(self, "settings"):
+            return
+        details = v4l2_control_details()
+        prefix = f"camera/{self._camera_settings_id()}/ctl"
+        is_emeet = "emeet" in self.dev_combo.currentText().lower()
+        for cid, slider in self.sliders.items():
+            if cid not in details:
+                slider.setEnabled(False)
+                continue
+            slider.setEnabled(True)
+            lo, hi, step, default, current = details[cid]
+            slider.blockSignals(True)
+            slider.setRange(lo, hi)
+            slider.setSingleStep(max(1, step))
+            key = f"{prefix}/{cid}"
+            legacy_key = f"ctl/{cid}"
+            if self.settings.contains(key):
+                value = int(self.settings.value(key))
+            elif is_emeet and self.settings.contains(legacy_key):
+                value = int(self.settings.value(legacy_key))
+            else:
+                value = default
+            value = max(lo, min(hi, value))
+            slider.setValue(value)
+            self.value_labels[cid].setText(str(value))
+            slider.blockSignals(False)
+            v4l2_set(cid, value)
+
     def _restore_settings(self):
         s = self.settings
         if s.contains("resolution"):
             ridx = int(s.value("resolution"))
             if 0 <= ridx < len(RESOLUTIONS):
                 self.res_combo.setCurrentIndex(ridx)
-        for cid, sld in self.sliders.items():
-            k = f"ctl/{cid}"
-            if s.contains(k):
-                sld.setValue(int(s.value(k)))
+        self._load_camera_controls()
         if s.contains("zoom"):
             self.zoom_slider.setValue(int(s.value("zoom")))
         if s.contains("mic"):
@@ -2084,8 +2247,7 @@ class Panel(QMainWindow):
     def _save_settings(self):
         s = self.settings
         s.setValue("resolution", self.res_combo.currentIndex())
-        for cid, sld in self.sliders.items():
-            s.setValue(f"ctl/{cid}", sld.value())
+        self._save_camera_controls()
         s.setValue("zoom", self.zoom_slider.value())
         s.setValue("mic", self.mic_combo.currentData() or "")
         s.setValue("bitrate", self.bitrate_slider.value())
@@ -2110,7 +2272,7 @@ class Panel(QMainWindow):
         s.setValue("sec_npu", "true" if self.sec_npu_check.isChecked() else "false")
 
         # Guardar ajustes de Kinect
-        s.setValue("device_selector", self.dev_combo.currentData() or "emeet")
+        s.setValue("device_selector", self.dev_combo.currentData() or "")
         s.setValue("kinect_view", self.kin_view_combo.currentIndex())
         s.setValue("kinect_tilt", self.tilt_slider.value())
         s.setValue("kinect_led", self.led_combo.currentData() or 0)
@@ -2139,9 +2301,7 @@ class Panel(QMainWindow):
         w, h, fps, _ = RESOLUTIONS[self.res_combo.currentIndex()]
         wid = int(self.video.winId())   # ID de ventana nativa del widget de vídeo
         args = [
-            os.path.join(os.path.dirname(sys.executable), "mpv")
-            if os.path.exists(os.path.join(os.path.dirname(sys.executable), "mpv"))
-            else "mpv", CAM_URL,
+            mpv_executable(), CAM_URL,
             f"--wid={wid}",                       # render DENTRO de la app
             f"--input-ipc-server={IPC_SOCK}",
             "--no-config",                        # aislado de ~/.config/mpv (sin lua/HUD)
@@ -2152,7 +2312,7 @@ class Panel(QMainWindow):
             "--video-latency-hacks=yes",
             "--hwdec=no",                         # software MJPEG -> nunca toca el RGA
             "--vo=gpu", "--gpu-context=x11egl",    # X11 para honrar --wid (NO wayland)
-            "--demuxer-lavf-o=" + f"video_size={w}x{h},input_format=mjpeg,framerate={fps}",
+            "--demuxer-lavf-o=" + f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}",
             "--audio=no",                         # sin audio en el visor (se graba aparte)
             "--no-osc", "--osd-level=0", "--really-quiet",
             "--screenshot-directory=" + PHOTO_DIR,
@@ -2535,7 +2695,7 @@ class Panel(QMainWindow):
         w, h, fps, label = RESOLUTIONS[idx]
         self.sec_res_combo.setCurrentIndex(idx)
         mpv_ipc(["set_property", "demuxer-lavf-o",
-                 f"video_size={w}x{h},input_format=mjpeg,framerate={fps}"])
+                 f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}"])
         mpv_ipc(["loadfile", CAM_URL, "replace"])
         QTimer.singleShot(800, self._apply_view_state)  # re-aplicar zoom tras recargar
         self._flash(f"🎞 Resolución: {label}")
@@ -2770,7 +2930,7 @@ class Panel(QMainWindow):
             self.sec_side_status.setText("🟠 SEGURIDAD ACTIVA · Recuperando flujo…")
             w, h, fps, _ = RESOLUTIONS[self.res_combo.currentIndex()]
             mpv_ipc(["set_property", "demuxer-lavf-o",
-                     f"video_size={w}x{h},input_format=mjpeg,framerate={fps}"])
+                     f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}"])
             mpv_ipc(["loadfile", CAM_URL, "replace"])
             self._sec_check_attempts = 0
             QTimer.singleShot(1800, self._begin_sec_recording)
