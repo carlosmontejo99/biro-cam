@@ -1,17 +1,35 @@
 name: Build AppImage
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appimage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
-    name: Build AppImage (aarch64)
-    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        include:
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+          - arch: x86_64
+            runner: ubuntu-24.04
+    name: Build AppImage (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
@@ -20,29 +38,53 @@ jobs:
 
       - name: Install Miniforge / Conda
         run: |
-          wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh
-          bash Miniforge3-Linux-aarch64.sh -b -p $HOME/miniforge3
+          wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-${{ matrix.arch }}.sh
+          bash Miniforge3-Linux-${{ matrix.arch }}.sh -b -p $HOME/miniforge3
           echo "$HOME/miniforge3/bin" >> $GITHUB_PATH
 
       - name: Create Conda environment
         run: |
-          $HOME/miniforge3/bin/conda create -y -n biro-cam-build python=3.12
-          $HOME/miniforge3/envs/biro-cam-build/bin/pip install PySide6 opencv-python numpy
+          $HOME/miniforge3/bin/conda create -y -n biro-cam-build -c conda-forge python=3.12 mpv
+          PYTHONNOUSERSITE=1 $HOME/miniforge3/envs/biro-cam-build/bin/pip install PySide6 opencv-python numpy
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            PYTHONNOUSERSITE=1 $HOME/miniforge3/envs/biro-cam-build/bin/pip install rknn-toolkit-lite2
+          fi
           $HOME/miniforge3/bin/pip install conda-pack
 
       - name: Download appimagetool
         run: |
           mkdir -p $HOME/.cache/the_curator
-          wget -O $HOME/.cache/the_curator/appimagetool-aarch64.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
-          chmod +x $HOME/.cache/the_curator/appimagetool-aarch64.AppImage
+          wget -O $HOME/.cache/the_curator/appimagetool-${{ matrix.arch }}.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.arch }}.AppImage
+          chmod +x $HOME/.cache/the_curator/appimagetool-${{ matrix.arch }}.AppImage
 
       - name: Build AppImage
         run: |
-          bash packaging/build_appimage.sh
+          TARGET_ARCH=${{ matrix.arch }} bash packaging/build_appimage.sh
+
+      - name: Upload release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-${{ matrix.arch }}
+          path: dist/Biro-Cam-${{ matrix.arch }}.AppImage
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download AppImages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: appimage-*
+          path: dist
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Biro-Cam-aarch64.AppImage
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: dist/*.AppImage

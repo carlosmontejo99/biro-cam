@@ -3,17 +3,20 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21304061.svg)](https://doi.org/10.5281/zenodo.21304061)
 
 
-Aplicación de control y grabación para cámaras UVC en Orange Pi 5 Max (RK3588),
-diseñada para la EMEET SmartCam S600, con modo Seguridad mediante YOLOv5 acelerado
-por NPU y soporte opcional para Xbox 360 Kinect.
+Aplicación de control y grabación para cámaras UVC en Linux, diseñada para la
+EMEET SmartCam S600. Funciona en Orange Pi 5 Max (RK3588) y equipos x86_64 como
+Bazzite; ofrece aceleración NPU en Rockchip, fallback CPU y soporte opcional para
+Xbox 360 Kinect.
 
 > 📍 **Hogar único del proyecto:**
 > `~/Documentos/B.I.O.R./5. PROJECTS/CAMARA_EMEET_S600/`
 > El índice maestro está en `_INDICE.md`; los documentos en `docs/`.
 
 ## Ejecutar
-- **Usuario final:** desde el menú → **"B.I.O.R. Cam"** (lanza la AppImage), o doble clic a
-  `dist/Biro-Cam-aarch64.AppImage`.
+- **Orange Pi:** `dist/Biro-Cam-aarch64.AppImage`.
+- **PC/Bazzite:** `dist/Biro-Cam-x86_64.AppImage`.
+- **Menú:** `bash packaging/install_desktop.sh` elige automáticamente el archivo
+  correspondiente al equipo.
 - **Desarrollo:** `/home/carlos/miniforge3/envs/biro-cam-build/bin/python camara_s600.py`
 
 ## Características
@@ -45,13 +48,18 @@ por NPU y soporte opcional para Xbox 360 Kinect.
   (brillo, contraste, saturación, gamma, ganancia, zoom, foco, exposición) van por
   `v4l2-ctl` en vivo.
 
-## Empaquetado (AppImage aarch64)
-- Construir: `bash packaging/build_appimage.sh` → `dist/Biro-Cam-aarch64.AppImage` (~147 MB).
-- Entorno de build: conda `biro-cam-build` (Python 3.12, PySide6 6.11.1 y RKNNLite 2.3.2).
-- El modelo `assets/yolov5s-640-640-rk3588.rknn` va incluido en la AppImage.
+## Empaquetado AppImage
+- Construir: `bash packaging/build_appimage.sh`. La arquitectura se detecta con
+  `uname -m` y produce `dist/Biro-Cam-aarch64.AppImage` o
+  `dist/Biro-Cam-x86_64.AppImage`.
+- Las etiquetas `v*` de GitHub construyen y adjuntan ambas arquitecturas al Release.
+- Entorno de build: conda `biro-cam-build` (Python 3.12, PySide6, OpenCV y mpv);
+  la variante ARM puede incluir además RKNNLite.
+- El modelo RKNN solo se usa en RK3588; x86_64 selecciona OpenCV/CPU.
 
 ## Dependencias en runtime
-- `mpv`, `v4l2-ctl` (v4l-utils) del sistema. PySide6/Python van bundleados en la AppImage.
+- `v4l2-ctl` (v4l-utils) y FFmpeg del sistema. PySide6/Python van bundleados;
+  el empaquetado de GitHub también incluye `mpv`.
 
 ## Vídeo incrustado
 La cámara se muestra DENTRO de la ventana (mpv embebido con `--wid`). Requiere X11, así que
