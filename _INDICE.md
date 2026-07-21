@@ -1,6 +1,7 @@
 # 📷 Cámara EMEET SmartCam S600 — Hub del tema
 
-Hogar canónico de TODO lo relacionado con la cámara EMEET S600 en el Orange Pi 5 Max.
+Hogar canónico de B.I.O.R. Cam para la EMEET S600, Orange Pi/RK3588 y equipos
+x86_64 como ASUS ROG con Bazzite.
 **Siempre trabajar este tema desde aquí:**
 `~/Documentos/B.I.O.R./5. PROJECTS/CAMARA_EMEET_S600/` (código + AppImage + docs, todo junto).
 
@@ -8,6 +9,9 @@ Hogar canónico de TODO lo relacionado con la cámara EMEET S600 en el Orange Pi
 
 ## 📄 Documentación (subcarpeta `docs/`)
 
+- **[Evaluación técnica, nivel e impacto de B.I.O.R. Cam v2.9](./docs/EVALUACION_E_IMPACTO_BIOR_CAM_v2.9.md)**
+  — valoración del nivel de ingeniería, impacto técnico y práctico, valor profesional,
+  aplicaciones futuras y requisitos para evolucionar hacia un producto industrial.
 - **[Bitácora: Diagnóstico, Arreglos y Plan](./docs/Cámara%20EMEET%20S600%20—%20Diagnóstico,%20Arreglos%20y%20Plan%20(Bitácora).html)**
   — causa raíz del colapso (bug RGA >4GB), arreglos con rutas exactas, verificación,
   recuperación manual y roadmap. Abrir en navegador.
@@ -91,7 +95,7 @@ Hogar canónico de TODO lo relacionado con la cámara EMEET S600 en el Orange Pi
 - Si el codificador RKMPP no puede inicializarse, ambos modos reintentan automáticamente con
   `libx264`/`libx265` por software; así el archivo se conserva sin depender del estado de MPP.
 
-_Última actualización: 2026-07-14_
+_Última actualización: 2026-07-21 — B.I.O.R. Cam v2.10.0_
 
 ## Corrección v2.3 · 21-jun-2026
 
@@ -147,4 +151,3 @@ _Última actualización: 2026-07-14_
 - AppImage incluye RKNNLite 2.3.2 y el modelo RKNN validado sobre hardware real.
 - Se recuperan conversiones interrumpidas y se rechazan MP4 cuya duración resulte truncada.
 - El constructor ya no cierra una AppImage que se encuentre en ejecución.
-

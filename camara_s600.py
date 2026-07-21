@@ -824,6 +824,16 @@ class Panel(QMainWindow):
         self.video.setMinimumSize(480, 360)
         outer.addWidget(self.video, 1)
 
+        # Algunas cámaras dobles (RGB + IR), como la del ASUS ROG, comparten
+        # sensor/controlador. Al volver de IR, la exposición RGB tarda varios
+        # segundos en converger y los primeros cuadros salen casi negros.
+        self.camera_warmup_label = QLabel("Ajustando exposición…", self.video)
+        self.camera_warmup_label.setAlignment(Qt.AlignCenter)
+        self.camera_warmup_label.setAttribute(Qt.WA_NativeWindow, True)
+        self.camera_warmup_label.setStyleSheet(
+            "background:#000;color:#cbd5e1;font-size:24px;font-weight:600;")
+        self.camera_warmup_label.hide()
+
         # ---- Overlay profesional HUD del modo seguridad (semi-transparente) ---
         self.security_overlay = QWidget(self.video)
         self.security_overlay.setAttribute(Qt.WA_NativeWindow, True)
@@ -1720,6 +1730,8 @@ class Panel(QMainWindow):
                 self.security_label.setGeometry(0, 0, vw, vh)
             if hasattr(self, "kinect_label"):
                 self.kinect_label.setGeometry(0, 0, vw, vh)
+            if hasattr(self, "camera_warmup_label"):
+                self.camera_warmup_label.setGeometry(0, 0, vw, vh)
             if hasattr(self, "security_overlay") and self.security_overlay.isVisible():
                 bw, bh = 520, 340
                 self.security_overlay.setGeometry((vw - bw) // 2, (vh - bh) // 2, bw, bh)
@@ -1803,6 +1815,29 @@ class Panel(QMainWindow):
         v4l2_set("auto_exposure", 3 if self.exposure_auto else 1)
         v4l2_set("focus_automatic_continuous", 1 if self.focus_auto else 0)
         v4l2_set("white_balance_automatic", 1 if self.wb_auto else 0)
+
+    def _begin_camera_warmup(self, launch_id):
+        """Oculta cuadros negros mientras RGB recupera exposición tras usar IR."""
+        self.camera_warmup_label.setGeometry(0, 0, self.video.width(), self.video.height())
+        self.camera_warmup_label.show()
+        self.camera_warmup_label.raise_()
+        self.btn_photo.setEnabled(False)
+        if not self.recording:
+            self.btn_rec.setEnabled(False)
+        self._flash("Ajustando exposición de la cámara…")
+        QTimer.singleShot(4200, lambda: self._finish_camera_warmup(launch_id))
+
+    def _finish_camera_warmup(self, launch_id):
+        if launch_id != self._camera_launch_id:
+            return
+        self.camera_warmup_label.hide()
+        self.btn_photo.setEnabled(True)
+        self.btn_rec.setEnabled(True)
+        self._flash("Cámara lista")
+
+    def _apply_auto_settings_if_current(self, launch_id):
+        if launch_id == self._camera_launch_id:
+            self._apply_auto_settings()
 
     # ----------------------------------------------------------------- filtros: espejo/efecto/encuadre
     def _grid_filters(self, idx):
@@ -2326,10 +2361,12 @@ class Panel(QMainWindow):
             # Evita que la autoexposición reduzca los FPS en poca luz (si la UVC lo soporta).
             v4l2_set("exposure_auto_priority", 0)
             self.mpv_proc = subprocess.Popen(args, env=env)
-            self._flash("Cámara iniciada")
+            self._camera_launch_id = getattr(self, "_camera_launch_id", 0) + 1
+            launch_id = self._camera_launch_id
+            self._begin_camera_warmup(launch_id)
             QTimer.singleShot(1200, self._apply_view_state)
             QTimer.singleShot(2500, lambda: setattr(self, "_started", True))
-            QTimer.singleShot(3000, self._apply_auto_settings)
+            QTimer.singleShot(3000, lambda: self._apply_auto_settings_if_current(launch_id))
         except FileNotFoundError:
             self._flash("ERROR: mpv no está instalado ni incluido en la AppImage")
 
