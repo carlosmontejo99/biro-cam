@@ -183,3 +183,12 @@ _Última actualización: 2026-08-13 — B.I.O.R. Cam v2.11.0_
   OpenCV multiescala primero (rápido) → si no decodifica, zbar. Así el QR de
   YouTube (`https://m.youtube.com/`) se detecta y los B&W siguen siendo
   instantáneos.
+- **Escáner de notas adhesivas + panel compacto (13-ago):** la detección de
+  documento ya no depende solo del contraste en grises: baja el mínimo de área
+  a 2%, prueba dos umbrales de Canny, acepta rectángulos rotados (notas con
+  esquinas redondeadas) y añade una pasada por color HSV (amarillo/naranja) que
+  enmarca la nota adhesiva incluso sobre fondos claros. El panel de controles
+  se compactó (márgenes y espaciado menores) y los botones **QR / Escanear** y
+  su panel de resultados se movieron arriba, justo bajo el selector de
+  dispositivo: al detectar un QR, el enlace y sus botones aparecen sin tener
+  que bajar la barra.

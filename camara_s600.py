@@ -985,21 +985,38 @@ class ScanEngine(QObject):
 
     # ---- detección de página (documento) ----
     def _detect_page(self, small, scale):
+        """Detecta el documento/nota. Combina contornos de borde, cuadriláteros
+        permisivos y una pasada por color para notas adhesivas de color (p. ej.
+        la nota amarilla que el borde por contraste no enmarca bien)."""
         display = small.copy()
+        h, w = small.shape[:2]
+        min_area = 0.02 * h * w
+        best = None
+        # 1) Contornos de borde con dos umbrales de Canny (bordes suaves incluidos)
         gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(gray, 50, 150)
-        edged = cv2.dilate(edged, None, iterations=2)
-        contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        best = None
-        min_area = 0.12 * small.shape[0] * small.shape[1]
-        for c in sorted(contours, key=cv2.contourArea, reverse=True)[:6]:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if (len(approx) == 4 and cv2.isContourConvex(approx)
-                    and cv2.contourArea(approx) > min_area):
-                best = self._order_points(approx.reshape(4, 2).astype(float))
+        for lo, hi in ((30, 100), (50, 150)):
+            edged = cv2.Canny(gray, lo, hi)
+            edged = cv2.dilate(edged, None, iterations=2)
+            contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            best = self._best_quad(contours, min_area, w, h)
+            if best is not None:
                 break
+        # 2) Notas adhesivas de color: mancha amarilla/naranja sobre cualquier fondo
+        if best is None:
+            best = self._page_from_color(small, max(min_area * 0.4, 0.004 * h * w), w, h)
+        # 3) Último recurso: rectángulo rotado mínimo de la mayor mancha de borde
+        if best is None:
+            edged = cv2.Canny(gray, 40, 120)
+            edged = cv2.dilate(edged, None, iterations=3)
+            contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            for c in sorted(contours, key=cv2.contourArea, reverse=True)[:6]:
+                if cv2.contourArea(c) < min_area:
+                    continue
+                box = self._order_points(cv2.boxPoints(cv2.minAreaRect(c)).astype(np.float32))
+                if self._quad_ok(box, min_area) and not self._touches_frame(box, w, h):
+                    best = box
+                    break
         if best is not None:
             for x, y in best.astype(int):
                 cv2.circle(display, (x, y), 5, (94, 197, 34), -1, cv2.LINE_AA)
@@ -1014,6 +1031,61 @@ class ScanEngine(QObject):
                         0.6, (148, 163, 184), 1, cv2.LINE_AA)
         self.page_detected.emit(best is not None)
         self.frame_ready.emit(display)
+
+    def _best_quad(self, contours, min_area, w, h):
+        """Cuadrilátero 4-puntos (o rectángulo rotado mínimo) de la mayor mancha."""
+        for c in sorted(contours, key=cv2.contourArea, reverse=True)[:12]:
+            area = cv2.contourArea(c)
+            if area < min_area:
+                continue
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            if len(approx) == 4 and cv2.isContourConvex(approx):
+                quad = self._order_points(approx.reshape(4, 2).astype(float))
+                if self._quad_ok(quad, min_area) and not self._touches_frame(quad, w, h):
+                    return quad
+            rect = cv2.minAreaRect(c)
+            box = self._order_points(cv2.boxPoints(rect).astype(np.float32))
+            if self._quad_ok(box, min_area * 0.8) and not self._touches_frame(box, w, h):
+                return box
+        return None
+
+    @staticmethod
+    def _quad_ok(box, min_area):
+        """Valida un cuadrilátero: área suficiente y aspecto de hoja/nota."""
+        side1 = float(np.linalg.norm(box[1] - box[0]))
+        side2 = float(np.linalg.norm(box[2] - box[1]))
+        if side1 < 2 or side2 < 2:
+            return False
+        if cv2.contourArea(np.array(box, dtype=np.int32)) < min_area:
+            return False
+        ratio = max(side1, side2) / min(side1, side2)
+        return ratio <= 5.0
+
+    @staticmethod
+    def _touches_frame(box, w, h):
+        """True si el cuadrilátero abarca prácticamente todo el cuadro (falso
+        positivo: se está enmarcando la escena entera, no un documento)."""
+        xs, ys = box[:, 0], box[:, 1]
+        return (xs.min() <= 2 and ys.min() <= 2
+                and xs.max() >= w - 3 and ys.max() >= h - 3)
+
+    def _page_from_color(self, bgr, min_area, w, h):
+        """Nota adhesiva de color (amarillo/naranja): mancha saturada en HSV."""
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        hh, ss, _ = cv2.split(hsv)
+        mask = ((hh >= 15) & (hh <= 45) & (ss > 70)).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in sorted(contours, key=cv2.contourArea, reverse=True)[:3]:
+            if cv2.contourArea(c) < min_area:
+                continue
+            rect = cv2.minAreaRect(c)
+            box = self._order_points(cv2.boxPoints(rect).astype(np.float32))
+            if self._quad_ok(box, min_area) and not self._touches_frame(box, w, h):
+                return box
+        return None
 
     @staticmethod
     def _order_points(pts):
@@ -1174,8 +1246,8 @@ class Panel(QMainWindow):
         self.panel.setObjectName("panel")
         self.panel.setFixedWidth(390)
         lay = QVBoxLayout(self.panel)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(8)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(5)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.panel)
@@ -1224,6 +1296,85 @@ class Panel(QMainWindow):
         self.dev_combo.currentIndexChanged.connect(self._on_device_changed)
         dev_select_lay.addWidget(self.dev_combo, 1)
         lay.addWidget(self.dev_select_box)
+        lay.addWidget(self._sep())
+
+        # ---- Modos: QR / Escáner de documentos (arriba: el resultado del QR
+        # aparece sin necesidad de bajar el panel) ---------------------------
+        self.modes_box = QWidget()
+        modes_lay = QHBoxLayout(self.modes_box)
+        modes_lay.setContentsMargins(0, 0, 0, 0)
+        self.btn_qr = QPushButton("📱 QR")
+        self.btn_scan = QPushButton("📄 Escanear")
+        self.btn_qr.setCheckable(True)
+        self.btn_scan.setCheckable(True)
+        self.btn_qr.setMinimumHeight(38)
+        self.btn_scan.setMinimumHeight(38)
+        self.btn_qr.setToolTip("Detectar códigos QR en vivo (Q)")
+        self.btn_scan.setToolTip("Escanear un documento: lo endereza y lo guarda (E)")
+        self.btn_qr.clicked.connect(lambda: self._toggle_scan_mode("qr"))
+        self.btn_scan.clicked.connect(lambda: self._toggle_scan_mode("scan"))
+        modes_lay.addWidget(self.btn_qr)
+        modes_lay.addWidget(self.btn_scan)
+        lay.addWidget(self.modes_box)
+        self.emeet_widgets.append(self.modes_box)
+
+        # ---- Panel de resultados del modo QR/Escáner (oculto por defecto) ----
+        self.scan_panel = QWidget()
+        sp_lay = QVBoxLayout(self.scan_panel)
+        sp_lay.setContentsMargins(8, 8, 8, 4)
+        sp_lay.setSpacing(8)
+
+        self.scan_status = QLabel("…")
+        self.scan_status.setAlignment(Qt.AlignCenter)
+        self.scan_status.setWordWrap(True)
+        self.scan_status.setStyleSheet(
+            "font-size:15px;font-weight:bold;color:#93c5fd;padding:8px;"
+            "background:#111827;border:1px solid #334155;border-radius:6px;")
+        sp_lay.addWidget(self.scan_status)
+
+        self.scan_capture_btn = QPushButton("📸 Capturar página")
+        self.scan_capture_btn.setMinimumHeight(40)
+        self.scan_capture_btn.setToolTip("Endereza y captura la página detectada (C)")
+        self.scan_capture_btn.clicked.connect(self._scan_capture_page)
+        sp_lay.addWidget(self.scan_capture_btn)
+
+        qr_res = QHBoxLayout()
+        self.scan_copy_btn = QPushButton("📋 Copiar")
+        self.scan_url_btn = QPushButton("🌐 Abrir URL")
+        self.scan_save_qr_btn = QPushButton("💾 Guardar QR")
+        self.scan_copy_btn.setToolTip("Copiar el contenido del QR al portapapeles")
+        self.scan_url_btn.setToolTip("Abrir la URL detectada en el navegador")
+        self.scan_save_qr_btn.setToolTip("Guardar una imagen recortada del código QR")
+        self.scan_copy_btn.clicked.connect(self._scan_copy_content)
+        self.scan_url_btn.clicked.connect(self._scan_open_url)
+        self.scan_save_qr_btn.clicked.connect(self._scan_save_qr)
+        for b in (self.scan_copy_btn, self.scan_url_btn, self.scan_save_qr_btn):
+            b.setMinimumHeight(34)
+            qr_res.addWidget(b)
+        sp_lay.addLayout(qr_res)
+
+        doc_res = QHBoxLayout()
+        self.scan_bw_combo = QComboBox()
+        self.scan_bw_combo.addItem("B/N automático", "bw")
+        self.scan_bw_combo.addItem("Color natural", "color")
+        self.scan_bw_combo.setToolTip("Estilo de salida del documento escaneado")
+        self.scan_bw_combo.currentIndexChanged.connect(self._scan_preview_result)
+        self.scan_save_doc_btn = QPushButton("💾 Guardar")
+        self.scan_copy_img_btn = QPushButton("📋 Copiar")
+        self.scan_discard_btn = QPushButton("✕ Volver")
+        self.scan_save_doc_btn.setToolTip("Guardar el documento en la carpeta Escaner")
+        self.scan_copy_img_btn.setToolTip("Copiar la imagen del documento al portapapeles")
+        self.scan_discard_btn.setToolTip("Descartar y volver a la vista en vivo")
+        self.scan_save_doc_btn.clicked.connect(self._scan_save_doc)
+        self.scan_copy_img_btn.clicked.connect(self._scan_copy_image)
+        self.scan_discard_btn.clicked.connect(self._scan_discard)
+        doc_res.addWidget(self.scan_bw_combo)
+        doc_res.addWidget(self.scan_save_doc_btn)
+        doc_res.addWidget(self.scan_copy_img_btn)
+        doc_res.addWidget(self.scan_discard_btn)
+        sp_lay.addLayout(doc_res)
+        self.scan_panel.hide()
+        lay.addWidget(self.scan_panel)
         lay.addWidget(self._sep())
 
 
@@ -1515,83 +1666,6 @@ class Panel(QMainWindow):
             pre_lay.addWidget(b)
         lay.addWidget(self.presets_container)
         self.emeet_widgets.append(self.presets_container)
-
-        # ---- Modos: QR / Escáner de documentos ------------------------------
-        self.modes_box = QWidget()
-        modes_lay = QHBoxLayout(self.modes_box)
-        modes_lay.setContentsMargins(0, 0, 0, 0)
-        self.btn_qr = QPushButton("📱 QR")
-        self.btn_scan = QPushButton("📄 Escanear")
-        self.btn_qr.setCheckable(True)
-        self.btn_scan.setCheckable(True)
-        self.btn_qr.setMinimumHeight(38)
-        self.btn_scan.setMinimumHeight(38)
-        self.btn_qr.setToolTip("Detectar códigos QR en vivo (Q)")
-        self.btn_scan.setToolTip("Escanear un documento: lo endereza y lo guarda (E)")
-        self.btn_qr.clicked.connect(lambda: self._toggle_scan_mode("qr"))
-        self.btn_scan.clicked.connect(lambda: self._toggle_scan_mode("scan"))
-        modes_lay.addWidget(self.btn_qr)
-        modes_lay.addWidget(self.btn_scan)
-        lay.addWidget(self.modes_box)
-        self.emeet_widgets.append(self.modes_box)
-
-        # ---- Panel de resultados del modo QR/Escáner (oculto por defecto) ----
-        self.scan_panel = QWidget()
-        sp_lay = QVBoxLayout(self.scan_panel)
-        sp_lay.setContentsMargins(8, 8, 8, 4)
-        sp_lay.setSpacing(8)
-
-        self.scan_status = QLabel("…")
-        self.scan_status.setAlignment(Qt.AlignCenter)
-        self.scan_status.setWordWrap(True)
-        self.scan_status.setStyleSheet(
-            "font-size:15px;font-weight:bold;color:#93c5fd;padding:8px;"
-            "background:#111827;border:1px solid #334155;border-radius:6px;")
-        sp_lay.addWidget(self.scan_status)
-
-        self.scan_capture_btn = QPushButton("📸 Capturar página")
-        self.scan_capture_btn.setMinimumHeight(40)
-        self.scan_capture_btn.setToolTip("Endereza y captura la página detectada (C)")
-        self.scan_capture_btn.clicked.connect(self._scan_capture_page)
-        sp_lay.addWidget(self.scan_capture_btn)
-
-        qr_res = QHBoxLayout()
-        self.scan_copy_btn = QPushButton("📋 Copiar")
-        self.scan_url_btn = QPushButton("🌐 Abrir URL")
-        self.scan_save_qr_btn = QPushButton("💾 Guardar QR")
-        self.scan_copy_btn.setToolTip("Copiar el contenido del QR al portapapeles")
-        self.scan_url_btn.setToolTip("Abrir la URL detectada en el navegador")
-        self.scan_save_qr_btn.setToolTip("Guardar una imagen recortada del código QR")
-        self.scan_copy_btn.clicked.connect(self._scan_copy_content)
-        self.scan_url_btn.clicked.connect(self._scan_open_url)
-        self.scan_save_qr_btn.clicked.connect(self._scan_save_qr)
-        for b in (self.scan_copy_btn, self.scan_url_btn, self.scan_save_qr_btn):
-            b.setMinimumHeight(34)
-            qr_res.addWidget(b)
-        sp_lay.addLayout(qr_res)
-
-        doc_res = QHBoxLayout()
-        self.scan_bw_combo = QComboBox()
-        self.scan_bw_combo.addItem("B/N automático", "bw")
-        self.scan_bw_combo.addItem("Color natural", "color")
-        self.scan_bw_combo.setToolTip("Estilo de salida del documento escaneado")
-        self.scan_bw_combo.currentIndexChanged.connect(self._scan_preview_result)
-        self.scan_save_doc_btn = QPushButton("💾 Guardar")
-        self.scan_copy_img_btn = QPushButton("📋 Copiar")
-        self.scan_discard_btn = QPushButton("✕ Volver")
-        self.scan_save_doc_btn.setToolTip("Guardar el documento en la carpeta Escaner")
-        self.scan_copy_img_btn.setToolTip("Copiar la imagen del documento al portapapeles")
-        self.scan_discard_btn.setToolTip("Descartar y volver a la vista en vivo")
-        self.scan_save_doc_btn.clicked.connect(self._scan_save_doc)
-        self.scan_copy_img_btn.clicked.connect(self._scan_copy_image)
-        self.scan_discard_btn.clicked.connect(self._scan_discard)
-        doc_res.addWidget(self.scan_bw_combo)
-        doc_res.addWidget(self.scan_save_doc_btn)
-        doc_res.addWidget(self.scan_copy_img_btn)
-        doc_res.addWidget(self.scan_discard_btn)
-        sp_lay.addLayout(doc_res)
-        self.scan_panel.hide()
-        lay.addWidget(self.scan_panel)
 
         # ---- Botón de seguridad (fila completa, independiente) -------------
         self.btn_sec = QPushButton("🔒  Modo Seguridad")
