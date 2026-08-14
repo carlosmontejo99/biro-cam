@@ -68,7 +68,7 @@ def check_kinect_connected():
 
 # ----------------------------------------------------------------------------- Config
 APP_DIR   = os.path.dirname(os.path.abspath(__file__))
-VERSION   = "v2.10.0"
+VERSION   = "v2.11.0"
 
 
 def clean_env(env=None):
@@ -208,6 +208,11 @@ SECURITY_DIR = os.path.join(VIDEO_DIR, "Seguridad")
 RUNTIME_DIR = os.path.expanduser("~/.cache/biro-cam")
 SECURITY_FRAMES = ("/tmp/biro-cam-security-frame-a.jpg",
                    "/tmp/biro-cam-security-frame-b.jpg")
+
+SCAN_DIR   = os.path.expanduser("~/Imágenes/Camera/Escaner")
+QR_DIR     = os.path.expanduser("~/Imágenes/Camera/QR")
+SCAN_FRAMES = ("/tmp/biro-cam-scan-frame-a.jpg",
+               "/tmp/biro-cam-scan-frame-b.jpg")
 
 # Controles v4l2: (id, etiqueta, min, max, default)
 CONTROLS = [
@@ -789,6 +794,200 @@ class SecurityEngine(QObject):
             self.motion_detected.emit()
 
 
+class ScanEngine(QObject):
+    """Captura frames vía IPC de mpv (sin reabrir la UVC) y detecta códigos QR
+    o los bordes de un documento para escanearlo de forma enderezada."""
+
+    frame_ready = Signal(object)     # frame BGR anotado (reducido) para preview
+    qr_decoded = Signal(str)         # contenido de un QR recién detectado
+    page_detected = Signal(bool)     # hay página visible en el frame
+    status = Signal(str)
+
+    MAX_DETECT_W = 960
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.active = False
+        self.capturing = False
+        self.mode = "qr"             # "qr" | "scan"
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._process)
+        self._frame_index = 0
+        self._last_qr = ""
+        self._last_qr_pts = None     # contorno del QR en coords del frame completo
+        self._page_pts = None        # esquinas de la página (4,2) en coords completas
+        self._last_full = None       # último frame a resolución real (para guardar)
+        self._qr_detector = cv2.QRCodeDetector()
+
+    # ---- ciclo de vida ----
+    def start(self, mode):
+        self.mode = mode
+        self.active = True
+        self.capturing = True
+        self._frame_index = 0
+        self._last_qr = ""
+        self._last_qr_pts = None
+        self._page_pts = None
+        self._last_full = None
+        for path in SCAN_FRAMES:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        self._timer.start(150)       # ~6-7 fps: suficiente para alinear sin cargar CPU
+
+    def stop(self):
+        self.active = False
+        self.capturing = False
+        self._timer.stop()
+
+    def pause(self):
+        self.capturing = False
+
+    def resume(self):
+        self.capturing = True
+
+    def clear_page(self):
+        self._page_pts = None
+
+    @property
+    def last_qr_pts(self):
+        return self._last_qr_pts
+
+    @property
+    def last_full(self):
+        return self._last_full
+
+    # ---- bucle de captura ----
+    def _process(self):
+        if not self.capturing:
+            return
+        try:
+            self._process_inner()
+        except Exception as e:
+            print("Error en motor de escaneo:", e)
+            self.status.emit("Error en el detector")
+
+    def _process_inner(self):
+        if not self.capturing:
+            return
+        path = SCAN_FRAMES[self._frame_index]
+        self._frame_index = 1 - self._frame_index
+        reply = mpv_ipc_result(["screenshot-to-file", path, "video"])
+        if reply.get("error") != "success":
+            self.status.emit("El visor no responde")
+            return
+        frame = cv2.imread(path)
+        if frame is None:
+            self.status.emit("Captura inválida")
+            return
+        self._last_full = frame
+
+        # Reducir solo para el análisis (CPU bajo) manteniendo la relación de aspecto.
+        fh, fw = frame.shape[:2]
+        scale = min(1.0, self.MAX_DETECT_W / max(fw, fh))
+        small = frame if scale == 1.0 else cv2.resize(frame, (int(fw * scale), int(fh * scale)))
+
+        if self.mode == "qr":
+            self._detect_qr(small, scale)
+        else:
+            self._detect_page(small, scale)
+
+    # ---- detección QR ----
+    def _detect_qr(self, small, scale):
+        data, pts, _ = self._qr_detector.detectAndDecode(small)
+        display = small.copy()
+        if data and pts is not None and len(pts) >= 4:
+            pts_i = pts.astype(int)
+            cv2.polylines(display, [pts_i], True, (94, 197, 34), 3, cv2.LINE_AA)
+            cv2.putText(display, "QR", (pts_i[0][0], pts_i[0][1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (94, 197, 34), 2, cv2.LINE_AA)
+            self._last_qr_pts = (pts.astype(float) / scale).astype(int)
+            if data != self._last_qr:
+                self._last_qr = data
+                self.qr_decoded.emit(data)
+        else:
+            self._last_qr_pts = None
+        self.frame_ready.emit(display)
+
+    # ---- detección de página (documento) ----
+    def _detect_page(self, small, scale):
+        display = small.copy()
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(gray, 50, 150)
+        edged = cv2.dilate(edged, None, iterations=2)
+        contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        best = None
+        min_area = 0.12 * small.shape[0] * small.shape[1]
+        for c in sorted(contours, key=cv2.contourArea, reverse=True)[:6]:
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            if (len(approx) == 4 and cv2.isContourConvex(approx)
+                    and cv2.contourArea(approx) > min_area):
+                best = self._order_points(approx.reshape(4, 2).astype(float))
+                break
+        if best is not None:
+            for x, y in best.astype(int):
+                cv2.circle(display, (x, y), 5, (94, 197, 34), -1, cv2.LINE_AA)
+            cv2.polylines(display, [best.astype(int)], True, (246, 130, 59), 3, cv2.LINE_AA)
+            cv2.putText(display, "PAGINA", (int(best[0][0]), int(best[0][1]) - 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (246, 130, 59), 2, cv2.LINE_AA)
+            self._page_pts = (best / scale).astype(float)   # coords del frame completo
+        else:
+            self._page_pts = None
+            cv2.putText(display, "Busca el borde de la pagina",
+                        (16, small.shape[0] - 18), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (148, 163, 184), 1, cv2.LINE_AA)
+        self.page_detected.emit(best is not None)
+        self.frame_ready.emit(display)
+
+    @staticmethod
+    def _order_points(pts):
+        """Ordena las 4 esquinas como TL, TR, BR, BL (sumas y restas)."""
+        s = pts.sum(axis=1)
+        d = np.diff(pts, axis=1).ravel()
+        ordered = np.zeros((4, 2), dtype="float32")
+        ordered[0] = pts[np.argmin(s)]   # TL
+        ordered[2] = pts[np.argmax(s)]   # BR
+        ordered[1] = pts[np.argmin(d)]   # TR
+        ordered[3] = pts[np.argmax(d)]   # BL
+        return ordered
+
+    # ---- captura del documento ----
+    def capture_page(self):
+        """Endereza la página detectada usando el frame a resolución real."""
+        if self._last_full is None or self._page_pts is None:
+            return None
+        frame = self._last_full
+        pts = np.array(self._page_pts, dtype="float32")
+        (tl, tr, br, bl) = pts
+        out_w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
+        out_h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
+        if out_w > 2400:
+            k = 2400.0 / out_w
+            out_w, out_h = int(out_w * k), int(out_h * k)
+        dst = np.array([[0, 0], [out_w - 1, 0],
+                        [out_w - 1, out_h - 1], [0, out_h - 1]], dtype="float32")
+        M = cv2.getPerspectiveTransform(pts, dst)
+        return cv2.warpPerspective(frame, M, (out_w, out_h))
+
+    @staticmethod
+    def enhance(img, mode="bw"):
+        """Aplica el estilo de salida al documento enderezado (sin perder el original)."""
+        if mode == "color":
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            out = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+            return cv2.convertScaleAbs(out, alpha=1.03, beta=6)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY, 31, 15)
+        return cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
+
+
 # ----------------------------------------------------------------------------- UI
 class Panel(QMainWindow):
     def __init__(self):
@@ -880,6 +1079,21 @@ class Panel(QMainWindow):
         self.kinect_label.setAlignment(Qt.AlignCenter)
         self.kinect_label.setStyleSheet("background:#000;")
         self.kinect_label.hide()
+
+        # ---- Preview de los modos QR / Escáner (OpenCV) ----------------------
+        self.scan_label = QLabel(self.video)
+        self.scan_label.setAlignment(Qt.AlignCenter)
+        self.scan_label.setStyleSheet("background:#000;")
+        self.scan_label.hide()
+
+        # Banner de ayuda sobre el preview (mensaje claro, mínima fricción)
+        self.scan_banner = QLabel("", self.video)
+        self.scan_banner.setAlignment(Qt.AlignCenter)
+        self.scan_banner.setWordWrap(True)
+        self.scan_banner.setStyleSheet(
+            "background:rgba(6,11,22,0.78);color:#e6edf6;font-size:15px;font-weight:600;"
+            "border:1px solid #334155;border-radius:8px;padding:6px 12px;")
+        self.scan_banner.hide()
 
 
         # ---- Panel de controles (derecha) ---------------------------------
@@ -1229,6 +1443,83 @@ class Panel(QMainWindow):
         lay.addWidget(self.presets_container)
         self.emeet_widgets.append(self.presets_container)
 
+        # ---- Modos: QR / Escáner de documentos ------------------------------
+        self.modes_box = QWidget()
+        modes_lay = QHBoxLayout(self.modes_box)
+        modes_lay.setContentsMargins(0, 0, 0, 0)
+        self.btn_qr = QPushButton("📱 QR")
+        self.btn_scan = QPushButton("📄 Escanear")
+        self.btn_qr.setCheckable(True)
+        self.btn_scan.setCheckable(True)
+        self.btn_qr.setMinimumHeight(38)
+        self.btn_scan.setMinimumHeight(38)
+        self.btn_qr.setToolTip("Detectar códigos QR en vivo (Q)")
+        self.btn_scan.setToolTip("Escanear un documento: lo endereza y lo guarda (E)")
+        self.btn_qr.clicked.connect(lambda: self._toggle_scan_mode("qr"))
+        self.btn_scan.clicked.connect(lambda: self._toggle_scan_mode("scan"))
+        modes_lay.addWidget(self.btn_qr)
+        modes_lay.addWidget(self.btn_scan)
+        lay.addWidget(self.modes_box)
+        self.emeet_widgets.append(self.modes_box)
+
+        # ---- Panel de resultados del modo QR/Escáner (oculto por defecto) ----
+        self.scan_panel = QWidget()
+        sp_lay = QVBoxLayout(self.scan_panel)
+        sp_lay.setContentsMargins(8, 8, 8, 4)
+        sp_lay.setSpacing(8)
+
+        self.scan_status = QLabel("…")
+        self.scan_status.setAlignment(Qt.AlignCenter)
+        self.scan_status.setWordWrap(True)
+        self.scan_status.setStyleSheet(
+            "font-size:15px;font-weight:bold;color:#93c5fd;padding:8px;"
+            "background:#111827;border:1px solid #334155;border-radius:6px;")
+        sp_lay.addWidget(self.scan_status)
+
+        self.scan_capture_btn = QPushButton("📸 Capturar página")
+        self.scan_capture_btn.setMinimumHeight(40)
+        self.scan_capture_btn.setToolTip("Endereza y captura la página detectada (C)")
+        self.scan_capture_btn.clicked.connect(self._scan_capture_page)
+        sp_lay.addWidget(self.scan_capture_btn)
+
+        qr_res = QHBoxLayout()
+        self.scan_copy_btn = QPushButton("📋 Copiar")
+        self.scan_url_btn = QPushButton("🌐 Abrir URL")
+        self.scan_save_qr_btn = QPushButton("💾 Guardar QR")
+        self.scan_copy_btn.setToolTip("Copiar el contenido del QR al portapapeles")
+        self.scan_url_btn.setToolTip("Abrir la URL detectada en el navegador")
+        self.scan_save_qr_btn.setToolTip("Guardar una imagen recortada del código QR")
+        self.scan_copy_btn.clicked.connect(self._scan_copy_content)
+        self.scan_url_btn.clicked.connect(self._scan_open_url)
+        self.scan_save_qr_btn.clicked.connect(self._scan_save_qr)
+        for b in (self.scan_copy_btn, self.scan_url_btn, self.scan_save_qr_btn):
+            b.setMinimumHeight(34)
+            qr_res.addWidget(b)
+        sp_lay.addLayout(qr_res)
+
+        doc_res = QHBoxLayout()
+        self.scan_bw_combo = QComboBox()
+        self.scan_bw_combo.addItem("B/N automático", "bw")
+        self.scan_bw_combo.addItem("Color natural", "color")
+        self.scan_bw_combo.setToolTip("Estilo de salida del documento escaneado")
+        self.scan_bw_combo.currentIndexChanged.connect(self._scan_preview_result)
+        self.scan_save_doc_btn = QPushButton("💾 Guardar")
+        self.scan_copy_img_btn = QPushButton("📋 Copiar")
+        self.scan_discard_btn = QPushButton("✕ Volver")
+        self.scan_save_doc_btn.setToolTip("Guardar el documento en la carpeta Escaner")
+        self.scan_copy_img_btn.setToolTip("Copiar la imagen del documento al portapapeles")
+        self.scan_discard_btn.setToolTip("Descartar y volver a la vista en vivo")
+        self.scan_save_doc_btn.clicked.connect(self._scan_save_doc)
+        self.scan_copy_img_btn.clicked.connect(self._scan_copy_image)
+        self.scan_discard_btn.clicked.connect(self._scan_discard)
+        doc_res.addWidget(self.scan_bw_combo)
+        doc_res.addWidget(self.scan_save_doc_btn)
+        doc_res.addWidget(self.scan_copy_img_btn)
+        doc_res.addWidget(self.scan_discard_btn)
+        sp_lay.addLayout(doc_res)
+        self.scan_panel.hide()
+        lay.addWidget(self.scan_panel)
+
         # ---- Botón de seguridad (fila completa, independiente) -------------
         self.btn_sec = QPushButton("🔒  Modo Seguridad")
         self.btn_sec.setCheckable(True)
@@ -1376,6 +1667,19 @@ class Panel(QMainWindow):
         self.security_engine.frame_ready.connect(self._security_frame_cb)
         self.security_engine.motion_detected.connect(self._on_sec_motion)
         self.security_engine.status.connect(self._flash)
+
+        # ---- Motor de escaneo QR / Escáner ----------------------------------
+        self.scan_active = False
+        self.scan_mode = None
+        self._scan_warped = None
+        self._scan_result = None
+        self._scan_page_found = False
+        self._scan_qr_data = ""
+        self.scan_engine = ScanEngine(self)
+        self.scan_engine.frame_ready.connect(self._scan_frame_cb)
+        self.scan_engine.qr_decoded.connect(self._scan_on_qr)
+        self.scan_engine.page_detected.connect(self._scan_on_page)
+        self.scan_engine.status.connect(self._flash)
         self.sec_npu_check.setText(
             f"👤 Detectar personas ({self.security_engine.backend_name})")
         self.sec_npu_check.setToolTip(
@@ -1411,6 +1715,8 @@ class Panel(QMainWindow):
     # ----------------------------------------------------------------- Métodos de Kinect
     def _on_device_changed(self, idx):
         global DEV, CAM_URL, RESOLUTIONS, CAM_INPUT_FORMAT
+        if self.scan_active:
+            self._exit_scan_mode()
         dev_type = self.dev_combo.currentData()
         if dev_type == "kinect":
             self._flash("Cambiando a Kinect...")
@@ -1730,6 +2036,10 @@ class Panel(QMainWindow):
                 self.security_label.setGeometry(0, 0, vw, vh)
             if hasattr(self, "kinect_label"):
                 self.kinect_label.setGeometry(0, 0, vw, vh)
+            if hasattr(self, "scan_label"):
+                self.scan_label.setGeometry(0, 0, vw, vh)
+            if hasattr(self, "scan_banner") and self.scan_banner.isVisible():
+                self._set_scan_banner(self.scan_banner.text())
             if hasattr(self, "camera_warmup_label"):
                 self.camera_warmup_label.setGeometry(0, 0, vw, vh)
             if hasattr(self, "security_overlay") and self.security_overlay.isVisible():
@@ -1982,6 +2292,10 @@ class Panel(QMainWindow):
             "0": self.preset_reset,
             "+": lambda: self._bump_zoom(10), "=": lambda: self._bump_zoom(10),
             "-": lambda: self._bump_zoom(-10),
+            "Q": lambda: self._toggle_scan_mode("qr"),
+            "E": lambda: self._toggle_scan_mode("scan"),
+            "C": self._scan_capture_page,
+            "Esc": self._exit_scan_mode,
         }
         for key, fn in binds.items():
             QShortcut(QKeySequence(key), self, activated=fn)
@@ -2793,6 +3107,241 @@ class Panel(QMainWindow):
         self._save_camera_controls()
         self._flash("↺ Valores nativos de la cámara restaurados")
 
+    # --------------------------------------------------------- modo QR / escáner
+    SCAN_LOCKED = (("btn_photo", "btn_rec", "res_box", "mic_box", "fx_combo",
+                    "grid_combo", "timer_combo", "photo_quality_combo",
+                    "shutter_check", "ts_checkbox", "bitrate_box", "dur_codec_box",
+                    "zoom_slider", "btn_sec", "presets_container"))
+
+    def _toggle_scan_mode(self, mode):
+        try:
+            if self.scan_active and self.scan_mode == mode:
+                self._exit_scan_mode()
+            elif self.scan_active:
+                self._exit_scan_mode()
+                self._enter_scan_mode(mode)
+            else:
+                self._enter_scan_mode(mode)
+        except Exception as e:
+            self._flash(f"⚠ Error al cambiar modo: {e}")
+            traceback.print_exc()
+
+    def _enter_scan_mode(self, mode):
+        if self.recording or self.security_active:
+            self._reset_scan_buttons()
+            return
+        self.scan_mode = mode
+        self.scan_active = True
+        self._reset_scan_buttons()
+        (self.btn_qr if mode == "qr" else self.btn_scan).setChecked(True)
+        self._scan_warped = None
+        self._scan_result = None
+        self._scan_page_found = False
+        self._scan_qr_data = ""
+        vw, vh = self.video.width(), self.video.height()
+        self.scan_label.setGeometry(0, 0, vw, vh)
+        self.scan_label.show()
+        self.scan_label.raise_()
+        self.scan_banner.show()
+        self._set_scan_banner("Apunta a un código QR…" if mode == "qr"
+                              else "Coloca el documento frente a la cámara…")
+        for name in self.SCAN_LOCKED:
+            getattr(self, name).setEnabled(False)
+        self.scan_panel.show()
+        self._scan_show_live(mode)
+        self.scan_engine.start(mode)
+        self._flash("📱 Modo QR" if mode == "qr" else "📄 Modo Escáner")
+
+    def _exit_scan_mode(self):
+        if not self.scan_active:
+            self._reset_scan_buttons()
+            return
+        self.scan_active = False
+        self.scan_engine.stop()
+        self.scan_label.hide()
+        self.scan_banner.hide()
+        self.scan_panel.hide()
+        self._reset_scan_buttons()
+        for name in self.SCAN_LOCKED:
+            getattr(self, name).setEnabled(True)
+        self._flash("Modo escaneo desactivado")
+
+    def _reset_scan_buttons(self):
+        self.btn_qr.setChecked(False)
+        self.btn_scan.setChecked(False)
+
+    def _set_scan_banner(self, text):
+        self.scan_banner.setText(text)
+        self.scan_banner.adjustSize()
+        vw, _ = self.video.width(), self.video.height()
+        bw = min(self.scan_banner.width() + 24, vw - 16)
+        bh = max(34, self.scan_banner.height() + 8)
+        self.scan_banner.setFixedWidth(bw)
+        self.scan_banner.setFixedHeight(bh)
+        self.scan_banner.move((vw - bw) // 2, 8)
+        self.scan_banner.raise_()
+
+    def _scan_show_live(self, mode):
+        """Vista en vivo: solo el botón de captura (escáner) y el estado."""
+        self.scan_capture_btn.setVisible(mode == "scan")
+        self.scan_capture_btn.setEnabled(False)
+        for b in (self.scan_copy_btn, self.scan_url_btn, self.scan_save_qr_btn,
+                  self.scan_bw_combo, self.scan_save_doc_btn,
+                  self.scan_copy_img_btn, self.scan_discard_btn):
+            b.setVisible(False)
+        self.scan_status.setText(
+            "Detectando QR…" if mode == "qr" else "Buscando el borde del documento…")
+
+    # ---- callbacks del motor ----
+    def _scan_frame_cb(self, frame):
+        if not self.scan_active:
+            return
+        self._scan_display(frame)
+
+    def _scan_display(self, frame):
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+        vw, vh = self.video.width(), self.video.height()
+        pm = QPixmap.fromImage(qimg).scaled(
+            vw, vh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.scan_label.setPixmap(pm)
+        self.scan_label.setGeometry(0, 0, vw, vh)
+        self.scan_banner.raise_()
+
+    def _scan_on_qr(self, data):
+        if not self.scan_active or self.scan_mode != "qr":
+            return
+        data = (data or "").strip()
+        self._scan_qr_data = data
+        short = data if len(data) <= 90 else data[:90] + "…"
+        self._set_scan_banner(f"QR detectado: {short}")
+        self.scan_status.setText(f"✓ Código QR:\n{short}")
+        self.scan_url_btn.setVisible(self._is_url(data))
+        self.scan_copy_btn.setVisible(True)
+        self.scan_save_qr_btn.setVisible(True)
+        self._play_shutter()   # confirmación suave
+
+    @staticmethod
+    def _is_url(data):
+        return bool(re.match(r"^(https?://|www\.)[^\s]+$", data, re.IGNORECASE))
+
+    def _scan_on_page(self, found):
+        if not self.scan_active or self.scan_mode != "scan":
+            return
+        if found == self._scan_page_found:
+            return
+        self._scan_page_found = found
+        if found:
+            self.scan_capture_btn.setEnabled(True)
+            self._set_scan_banner("Página detectada — pulsa Capturar")
+            self.scan_status.setText("✓ Documento enmarcado.\nPulsa «Capturar página».")
+        else:
+            self.scan_capture_btn.setEnabled(False)
+            self._set_scan_banner("Coloca el documento frente a la cámara…")
+            self.scan_status.setText("Buscando el borde del documento…")
+
+    # ---- captura del documento ----
+    def _scan_capture_page(self):
+        if not self.scan_active or self.scan_mode != "scan":
+            return
+        warped = self.scan_engine.capture_page()
+        if warped is None:
+            self._flash("⚠ No se detectó ninguna página")
+            return
+        self._scan_warped = warped
+        self.scan_engine.pause()          # congelar la detección en vivo
+        self._play_shutter()
+        self.scan_capture_btn.setVisible(False)
+        for b in (self.scan_bw_combo, self.scan_save_doc_btn,
+                  self.scan_copy_img_btn, self.scan_discard_btn):
+            b.setVisible(True)
+        self.scan_bw_combo.setCurrentIndex(0)
+        self._scan_preview_result()
+        self._set_scan_banner("Vista previa del escaneo — revisa y guarda")
+        self.scan_status.setText("✓ Documento enderezado.\nRevisa el resultado y guárdalo.")
+
+    def _scan_preview_result(self):
+        if self._scan_warped is None:
+            return
+        mode = self.scan_bw_combo.itemData(self.scan_bw_combo.currentIndex())
+        self._scan_result = self.scan_engine.enhance(self._scan_warped, mode)
+        self._scan_display(self._scan_result)
+
+    def _scan_discard(self):
+        if not self.scan_active or self.scan_mode != "scan":
+            return
+        self._scan_warped = None
+        self._scan_result = None
+        self._scan_page_found = False
+        self.scan_engine.resume()
+        self.scan_engine.clear_page()
+        self.scan_capture_btn.setVisible(True)
+        self.scan_capture_btn.setEnabled(False)
+        for b in (self.scan_bw_combo, self.scan_save_doc_btn,
+                  self.scan_copy_img_btn, self.scan_discard_btn):
+            b.setVisible(False)
+        self.scan_status.setText("Buscando el borde del documento…")
+        self._set_scan_banner("Coloca el documento frente a la cámara…")
+
+    def _scan_save_doc(self):
+        if self._scan_result is None:
+            return
+        os.makedirs(SCAN_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        color = self.scan_bw_combo.itemData(self.scan_bw_combo.currentIndex()) == "color"
+        ext = "jpg" if color else "png"
+        path = os.path.join(SCAN_DIR, f"Escaneo_{ts}.{ext}")
+        params = ([cv2.IMWRITE_JPEG_QUALITY, 95] if ext == "jpg"
+                  else [cv2.IMWRITE_PNG_COMPRESSION, 3])
+        ok = cv2.imwrite(path, self._scan_result, params)
+        if ok:
+            self._flash("💾 Documento guardado en Escaner")
+            self._scan_discard()
+        else:
+            self._flash("⚠ No se pudo guardar el documento")
+
+    def _scan_copy_image(self):
+        if self._scan_result is None:
+            return
+        rgb = cv2.cvtColor(self._scan_result, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+        QApplication.clipboard().setImage(qimg)
+        self._flash("📋 Imagen copiada al portapapeles")
+
+    # ---- acciones QR ----
+    def _scan_copy_content(self):
+        data = self._scan_qr_data
+        if not data:
+            return
+        QApplication.clipboard().setText(data)
+        self._flash("📋 Contenido del QR copiado")
+
+    def _scan_open_url(self):
+        data = self._scan_qr_data
+        if not data or not self._is_url(data):
+            return
+        if not data.lower().startswith(("http://", "https://")):
+            data = "https://" + data
+        subprocess.Popen(["xdg-open", data], env=clean_env())
+
+    def _scan_save_qr(self):
+        pts = self.scan_engine.last_qr_pts
+        full = self.scan_engine.last_full
+        if pts is None or full is None:
+            self._flash("⚠ QR no disponible para guardar")
+            return
+        os.makedirs(QR_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        path = os.path.join(QR_DIR, f"QR_{ts}.png")
+        x, y, w, h = cv2.boundingRect(pts)
+        x, y = max(0, x - 20), max(0, y - 20)
+        w = min(full.shape[1] - x, w + 40)
+        h = min(full.shape[0] - y, h + 40)
+        ok = cv2.imwrite(path, full[y:y + h, x:x + w])
+        self._flash("💾 QR guardado" if ok else "⚠ No se pudo guardar el QR")
+
     # ----------------------------------------------------------------- seguridad
     def _toggle_security(self):
         try:
@@ -2808,6 +3357,7 @@ class Panel(QMainWindow):
         if self.recording:
             self.btn_sec.setChecked(False)
             return
+        self._exit_scan_mode()   # los modos QR/Escáner y Seguridad son excluyentes
         # Confirmar que la grabación normal dejó libre stream-record antes de armar
         # seguridad. No se continúa con un estado heredado o sin respuesta de mpv.
         reply = mpv_ipc_result(["set_property", "stream-record", ""])
@@ -2836,7 +3386,8 @@ class Panel(QMainWindow):
         for w in (self.btn_photo, self.btn_rec, self.res_box, self.mic_box,
                    self.fx_combo, self.grid_combo, self.timer_combo,
                    self.photo_quality_combo, self.shutter_check, self.ts_checkbox,
-                   self.bitrate_box, self.dur_codec_box, self.zoom_slider):
+                   self.bitrate_box, self.dur_codec_box, self.zoom_slider,
+                   self.btn_qr, self.btn_scan):
             w.setEnabled(False)
         self.security_panel.show()
         # Arrancar motor
@@ -2872,7 +3423,8 @@ class Panel(QMainWindow):
         for w in (self.btn_photo, self.btn_rec, self.res_box, self.mic_box,
                    self.fx_combo, self.grid_combo, self.timer_combo,
                    self.photo_quality_combo, self.shutter_check, self.ts_checkbox,
-                   self.bitrate_box, self.dur_codec_box, self.zoom_slider):
+                   self.bitrate_box, self.dur_codec_box, self.zoom_slider,
+                   self.btn_qr, self.btn_scan):
             w.setEnabled(True)
         self._flash("Seguridad desactivada")
 
@@ -3075,6 +3627,7 @@ class Panel(QMainWindow):
             return
         self._save_settings()
         self._stop_security()
+        self._exit_scan_mode()
         if not self._stop_kinect():
             event.ignore()
             QTimer.singleShot(500, self.close)

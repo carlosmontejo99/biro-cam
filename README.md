@@ -1,4 +1,4 @@
-# B.I.O.R. Cam v2.10.0 — EMEET S600 en RK3588 y x86_64/Bazzite
+# B.I.O.R. Cam v2.11.0 — EMEET S600 en RK3588 y x86_64/Bazzite
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21304061.svg)](https://doi.org/10.5281/zenodo.21304061)
 
@@ -7,6 +7,20 @@ Aplicación de control y grabación para cámaras UVC en Linux, diseñada para l
 EMEET SmartCam S600. Funciona en Orange Pi 5 Max (RK3588) y equipos x86_64 como
 Bazzite; ofrece aceleración NPU en Rockchip, fallback CPU y soporte opcional para
 Xbox 360 Kinect.
+
+## Novedades de v2.11.0
+- **Modo QR:** botón «📱 QR» (o tecla `Q`). Detecta códigos QR en vivo sobre la
+  cámara sin reabrir el dispositivo UVC (captura interna de mpv, mismo motor que
+  Seguridad). Resalta el código, muestra su contenido y permite **Copiar**,
+  **Abrir URL** (si es una URL) y **Guardar QR** (imagen recortada en
+  `~/Imágenes/Camera/QR`).
+- **Modo Escáner de documentos:** botón «📄 Escanear» (o tecla `E`). Encuadra la
+  página en vivo (esquinas marcadas) y «📸 Capturar página» (o tecla `C`) la
+  endereza con transformación de perspectiva a resolución real, con acabado
+  **B/N automático** o **Color natural**. Guarda en `~/Imágenes/Camera/Escaner`
+  o la copia al portapapeles. `Esc` sale del modo.
+- Los modos QR/Escáner bloquean temporalmente foto/grabación/resolución y son
+  excluyentes entre sí y con el modo Seguridad (misma cámara, sin reinicios).
 
 ## Novedades de v2.10.0
 - Nuevo AppImage x86_64 compatible con Bazzite y laptops ASUS ROG.
@@ -44,13 +58,16 @@ Xbox 360 Kinect.
 - Modo seguridad: detección de movimiento por OpenCV, grabación automática con bitrate/configuración independiente
 - Detección de personas con YOLOv5 en la NPU RK3588 (~43 ms por inferencia), con fallback CPU
 - Soporte opcional para Xbox 360 Kinect: RGB, IR, profundidad, inclinación y LED; solo aparece si está conectado
+- Modo QR: detección en vivo con `cv2.QRCodeDetector`, resaltado y acciones Copiar / Abrir URL / Guardar QR
+- Escáner de documentos: encuadre automático de la página, enderezado por perspectiva y guardado limpio B/N o color
 - Recuperación de conversiones interrumpidas y rechazo de MP4 truncados por comparación de duración
 - Overlay HUD profesional en modo seguridad: panel semi-transparente 520×340px con fuentes grandes, barra de progreso, estado y parámetros
 - Efectos de imagen (B/N, sepia, vívido, cálido, negativo)
 - Espejo, zoom digital, auto-exposición/auto-foco/auto-blancos
 - Todos los ajustes se persisten entre sesiones (QSettings)
 - Atajos de teclado: `Espacio`/`S` foto, `R` grabar, `F` autofoco, `M` espejo,
-  `G` galería, `V` vídeos, `T` timestamp, `0` reset, `+`/`-` zoom
+  `G` galería, `V` vídeos, `T` timestamp, `0` reset, `+`/`-` zoom,
+  `Q` modo QR, `E` escáner, `C` capturar página, `Esc` salir del modo
 
 ## Arquitectura
 - `camara_s600.py` — panel Qt/PySide6. Lanza mpv con `--hwdec=no` (decode software →

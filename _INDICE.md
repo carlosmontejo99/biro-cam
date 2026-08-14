@@ -95,7 +95,7 @@ x86_64 como ASUS ROG con Bazzite.
 - Si el codificador RKMPP no puede inicializarse, ambos modos reintentan automáticamente con
   `libx264`/`libx265` por software; así el archivo se conserva sin depender del estado de MPP.
 
-_Última actualización: 2026-07-21 — B.I.O.R. Cam v2.10.0_
+_Última actualización: 2026-08-13 — B.I.O.R. Cam v2.11.0_
 
 ## Corrección v2.3 · 21-jun-2026
 
@@ -151,3 +151,20 @@ _Última actualización: 2026-07-21 — B.I.O.R. Cam v2.10.0_
 - AppImage incluye RKNNLite 2.3.2 y el modelo RKNN validado sobre hardware real.
 - Se recuperan conversiones interrumpidas y se rechazan MP4 cuya duración resulte truncada.
 - El constructor ya no cierra una AppImage que se encuentre en ejecución.
+
+## Actualización v2.11.0 · 13-ago-2026 · Modo QR + Escáner de documentos
+
+- **Modo QR («📱 QR» / tecla Q):** detecta códigos QR en vivo usando el mismo
+  motor de captura interna de mpv que Seguridad (una sola conexión a la UVC, sin
+  riesgo del bug DMA). Resalta el QR con una caja verde, muestra el contenido en
+  un banner y ofrece **Copiar**, **Abrir URL** y **Guardar QR** (recorte a
+  resolución real en `~/Imágenes/Camera/QR`).
+- **Modo Escáner («📄 Escanear» / tecla E):** detecta el borde de la página en
+  vivo (Canny + contorno + approxPolyDP), la endereza con `getPerspectiveTransform`
+  sobre el frame a resolución real, y la guarda con acabado **B/N automático** o
+  **Color natural** en `~/Imágenes/Camera/Escaner`, o la copia al portapapeles.
+- Los modos son excluyentes entre sí y con Seguridad; mientras están activos se
+  bloquean foto/grabación/resolución para evitar estados rotos. `Esc` sale.
+- Sin dependencias nuevas (usa `cv2.QRCodeDetector` + numpy ya bundleados);
+  AppImage reconstruido en aarch64 y regenerado en x86_64 por GitHub Actions al
+  pushear el tag `v2.11.0`.
