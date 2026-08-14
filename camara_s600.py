@@ -34,8 +34,8 @@ import cv2
 import numpy as np
 import threading
 
-from PySide6.QtCore import Qt, QTimer, QSettings, QEvent, QProcess, QObject, Signal, QThread
-from PySide6.QtGui import QIcon, QPixmap, QShortcut, QKeySequence, QImage
+from PySide6.QtCore import Qt, QTimer, QSettings, QEvent, QProcess, QObject, Signal, QThread, QUrl
+from PySide6.QtGui import QIcon, QPixmap, QShortcut, QKeySequence, QImage, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
     QMainWindow, QProgressBar, QPushButton, QScrollArea, QSlider, QSplitter,
@@ -77,11 +77,13 @@ def clean_env(env=None):
         env = dict(os.environ)
     else:
         env = dict(env)
-    # Si la AppImage guardó el LD_LIBRARY_PATH original, lo restauramos; de lo contrario, lo removemos.
     if "LD_LIBRARY_PATH_ORIG" in env:
         env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH_ORIG"]
     else:
         env.pop("LD_LIBRARY_PATH", None)
+    for var in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "PYTHONPATH", "PYTHONHOME",
+                "QT_QPA_PLATFORM", "LD_PRELOAD", "APPIMAGE", "APPDIR"):
+        env.pop(var, None)
     return env
 
 
@@ -2741,11 +2743,13 @@ class Panel(QMainWindow):
 
     def _open_photos(self):
         os.makedirs(PHOTO_DIR, exist_ok=True)
-        subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env())
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(PHOTO_DIR)):
+            subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env())
 
     def _open_videos(self):
         os.makedirs(VIDEO_DIR, exist_ok=True)
-        subprocess.Popen(["xdg-open", VIDEO_DIR], env=clean_env())
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(VIDEO_DIR)):
+            subprocess.Popen(["xdg-open", VIDEO_DIR], env=clean_env())
 
     def _set_locked(self, locked):
         # Bloquea (visualmente atenuado + 🔒) controles de grabación.
