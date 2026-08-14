@@ -2758,18 +2758,37 @@ class Panel(QMainWindow):
     def _open_folder_native(self, target_dir):
         os.makedirs(target_dir, exist_ok=True)
         env = dict(os.environ)
+        
         for k in list(env.keys()):
-            if k.startswith(("QT_", "PYTHON", "LD_", "XDG_DATA_DIRS", "GDK_", "GTK_")) or k in ("APPIMAGE", "APPDIR", "ARGV0"):
+            if k.startswith(("QT_", "PYTHON", "LD_", "GDK_", "GTK_")) or k in ("APPIMAGE", "APPDIR", "ARGV0"):
                 env.pop(k, None)
+        
         if "LD_LIBRARY_PATH_ORIG" in os.environ:
             env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH_ORIG"]
+            
+        raw_path = os.environ.get("PATH", "")
+        clean_paths = [p for p in raw_path.split(":") if not p.startswith("/tmp/.mount_")]
+        env["PATH"] = "/usr/bin:/bin:/usr/local/bin:" + ":".join(clean_paths)
+        
+        raw_xdg = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+        clean_xdg = [p for p in raw_xdg.split(":") if not p.startswith("/tmp/.mount_")]
+        env["XDG_DATA_DIRS"] = ":".join(clean_xdg) or "/usr/local/share:/usr/share"
 
-        try:
-            subprocess.Popen(["xdg-open", target_dir], env=env)
-            self._flash(f"📂 Carpeta abierta: {os.path.basename(target_dir)}")
-            return
-        except Exception as exc:
-            print("xdg-open error:", exc)
+        if shutil.which("gio"):
+            try:
+                subprocess.Popen(["gio", "open", target_dir], env=env)
+                self._flash(f"📂 Carpeta abierta: {os.path.basename(target_dir)}")
+                return
+            except Exception as exc:
+                print("gio open error:", exc)
+
+        if shutil.which("xdg-open"):
+            try:
+                subprocess.Popen(["xdg-open", target_dir], env=env)
+                self._flash(f"📂 Carpeta abierta: {os.path.basename(target_dir)}")
+                return
+            except Exception as exc:
+                print("xdg-open error:", exc)
 
         for cmd in (["nautilus", target_dir], ["dolphin", target_dir], ["pcmanfm", target_dir], ["thunar", target_dir]):
             if shutil.which(cmd[0]):
@@ -3230,16 +3249,19 @@ class Panel(QMainWindow):
                 self._flash("⚠ No hay frame disponible")
             return
 
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        photo_path = os.path.join(PHOTO_DIR, f"Foto_{ts}.jpg")
+
         if self.grid:
             mpv_ipc(["set_property", "vf", self._vf_chain(with_grid=False)])
-            QTimer.singleShot(140, self._snap_and_restore)
+            QTimer.singleShot(140, lambda: self._snap_and_restore(photo_path))
         else:
-            mpv_ipc(["screenshot", "video"])
-            self._flash("📷 Foto guardada")
+            mpv_ipc(["screenshot-to-file", photo_path, "video"])
+            self._flash(f"📷 Foto guardada: {os.path.basename(photo_path)}")
 
-    def _snap_and_restore(self):
-        mpv_ipc(["screenshot", "video"])
-        self._flash("📷 Foto guardada")
+    def _snap_and_restore(self, photo_path):
+        mpv_ipc(["screenshot-to-file", photo_path, "video"])
+        self._flash(f"📷 Foto guardada: {os.path.basename(photo_path)}")
         QTimer.singleShot(60, self._apply_vf)   # restaurar la rejilla
 
     def toggle_record(self):
