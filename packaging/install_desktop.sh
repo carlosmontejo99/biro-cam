@@ -45,8 +45,8 @@ Keywords=camera;webcam;B.I.O.R.;EMEET;S600;4K;
 EOF
 chmod 644 "$APPS_DIR/biro-cam.desktop"
 
-# El lanzador antiguo apuntaba al script de desarrollo; lo retiramos.
-rm -f "$APPS_DIR/camara-s600-panel.desktop" "$APPS_DIR/camara-s600.desktop"
+# El lanzador antiguo apuntaba al script de desarrollo o AppImage previa; los retiramos.
+rm -f "$APPS_DIR/camara-s600-panel.desktop" "$APPS_DIR/camara-s600.desktop" "$APPS_DIR/b.i.o.r._cam.desktop"
 
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" || true
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t "$ICON_DIR" 2>/dev/null || true

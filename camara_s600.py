@@ -68,7 +68,7 @@ def check_kinect_connected():
 
 # ----------------------------------------------------------------------------- Config
 APP_DIR   = os.path.dirname(os.path.abspath(__file__))
-VERSION   = "v2.11.5"
+VERSION   = "v2.12.0"
 
 
 def clean_env(env=None):
@@ -85,18 +85,180 @@ def clean_env(env=None):
     return env
 
 
-def mpv_executable():
-    """Prefiere un mpv del host con X11; Conda puede carecer de ese backend."""
+_MPV_BASE_CACHE = None
+
+
+def _mpv_candidates():
+    """Genera las listas de comandos base candidatas (host -> flatpak -> bundled).
+
+    IMPORTANTE: cuando se usa el mpv del flatpak, se lanza su binario real
+    (mpv-bin) vía bwrap COMPARTIENDO el namespace de red y /tmp. El sandbox de
+    flatpak normal aísla los sockets UNIX, por lo que la app no podría enviar
+    screenshot/stream-record a mpv (foto y grabación rotas). bwrap manual
+    elimina ese aislamiento sin sacrificar x11egl."""
+    out = []
     system_mpv = shutil.which("mpv")
     if system_mpv:
-        return system_mpv
-    for path in (
-            "/var/lib/flatpak/exports/bin/io.mpv.Mpv",
-            os.path.expanduser("~/.local/share/flatpak/exports/bin/io.mpv.Mpv")):
-        if os.path.exists(path) and os.access(path, os.X_OK):
-            return path
+        out.append([system_mpv])
+    try:
+        import glob
+        app_dirs = (glob.glob("/var/lib/flatpak/app/io.mpv.Mpv/*/active/files")
+                    + glob.glob(os.path.expanduser(
+                        "~/.local/share/flatpak/app/io.mpv.Mpv/*/active/files")))
+        if app_dirs:
+            app_dir = app_dirs[0]
+            mpv_bin = os.path.join(app_dir, "bin", "mpv-bin")
+            rt_dirs = (glob.glob("/var/lib/flatpak/runtime/"
+                                 "org.freedesktop.Platform/*/*/active/files")
+                       + glob.glob("/var/lib/flatpak/runtime/"
+                                   "org.freedesktop.Platform/*/active/files"))
+            if os.path.exists(mpv_bin) and rt_dirs:
+                rt_dir = rt_dirs[0]
+                loader = (glob.glob(os.path.join(rt_dir, "lib", "*",
+                                                 "ld-linux*.so*"))
+                          + glob.glob(os.path.join(rt_dir, "lib",
+                                                   "ld-linux*.so*")))
+                # Extensión GL del runtime (Mesa/llvmpipe por defecto, o el
+                # driver NVIDIA si está instalada la extensión correspondiente).
+                gl_ext = (glob.glob("/var/lib/flatpak/runtime/"
+                                    "org.freedesktop.Platform.GL.*/*/*/active/files")
+                          + glob.glob("/var/lib/flatpak/runtime/"
+                                      "org.freedesktop.Platform.GL.*/*/active/files")
+                          + glob.glob(os.path.expanduser(
+                              "~/.local/share/flatpak/runtime/"
+                              "org.freedesktop.Platform.GL.*/*/*/active/files"))
+                          + glob.glob(os.path.expanduser(
+                              "~/.local/share/flatpak/runtime/"
+                              "org.freedesktop.Platform.GL.*/*/active/files")))
+                gl_dir = gl_ext[0] if gl_ext else None
+                bwrap = shutil.which("bwrap") or "/usr/bin/bwrap"
+                if loader and os.access(bwrap, os.X_OK):
+                    home = os.path.expanduser("~")
+                    xdg = os.environ.get("XDG_RUNTIME_DIR",
+                                         f"/run/user/{os.getuid()}")
+                    # Dentro del sandbox el runtime queda montado en /usr, así
+                    # que el loader y mpv-bin se referencian con ruta de sandbox.
+                    loader_rel = "/usr" + loader[0].split("/files", 1)[1]
+                    mpv_bin_rel = "/app" + mpv_bin.split("/files", 1)[1]
+                    cmd = [
+                        bwrap,
+                        "--ro-bind", app_dir, "/app",
+                        "--ro-bind", rt_dir, "/usr",
+                    ]
+                    if gl_dir:
+                        cmd += ["--ro-bind", gl_dir,
+                                "/usr/lib/x86_64-linux-gnu/GL"]
+                    cmd += [
+                        "--dev-bind", "/dev", "/dev",
+                        "--proc", "/proc",
+                        "--bind", "/tmp", "/tmp",
+                        "--bind", xdg, xdg,
+                        "--bind", home, home,
+                        "--setenv", "LD_LIBRARY_PATH",
+                        ("/usr/lib/x86_64-linux-gnu/GL/lib:/app/lib:"
+                         "/usr/lib/x86_64-linux-gnu" if gl_dir else
+                         "/app/lib:/usr/lib/x86_64-linux-gnu"),
+                        "--setenv", "EGL_PLATFORM", "x11",
+                        "--setenv", "LIBGL_ALWAYS_SOFTWARE", "1",
+                    ]
+                    if gl_dir:
+                        cmd += [
+                            "--setenv", "__EGL_VENDOR_LIBRARY_DIRS",
+                            "/usr/lib/x86_64-linux-gnu/GL/glvnd/egl_vendor.d",
+                            "--setenv", "EGL_VENDOR_DIRS",
+                            "/usr/lib/x86_64-linux-gnu/GL/glvnd/egl_vendor.d",
+                        ]
+                    cmd += [loader_rel, mpv_bin_rel]
+                    out.append(cmd)
+    except Exception:
+        pass
     bundled = os.path.join(os.path.dirname(sys.executable), "mpv")
-    return bundled if os.path.exists(bundled) else "mpv"
+    if os.path.exists(bundled):
+        out.append([bundled])
+    out.append(["mpv"])
+    return out
+
+
+def mpv_base_cmd():
+    """Devuelve el comando base del mpv que SÍ sabe incrustarse en X11.
+
+    Prueba cada candidato con `--gpu-context=help` y elige el primero que
+    exponga x11egl (o x11). Sin esto, `which(mpv)` podía devolver un binario
+    recortado sin contextos de ventana (p. ej. el de conda-forge) y la cámara
+    salía en negro."""
+    global _MPV_BASE_CACHE
+    if _MPV_BASE_CACHE is not None:
+        return _MPV_BASE_CACHE
+    for base in _mpv_candidates():
+        try:
+            out = subprocess.run(base + ["--gpu-context=help"],
+                                 capture_output=True, text=True, timeout=8,
+                                 env=clean_env()).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if "x11egl" in out or "x11" in out:
+            _MPV_BASE_CACHE = base
+            return base
+    _MPV_BASE_CACHE = _mpv_candidates()[0]
+    return _MPV_BASE_CACHE
+
+
+def mpv_gpu_context():
+    """Elige el contexto GPU que soporta el mpv seleccionado (x11egl o x11);
+    si no expone ninguno, devuelve 'auto' para que mpv decida por sí mismo."""
+    base = mpv_base_cmd()
+    try:
+        out = subprocess.run(base + ["--gpu-context=help"],
+                             capture_output=True, text=True, timeout=8,
+                             env=clean_env()).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "auto"
+    if "x11egl" in out:
+        return "x11egl"
+    if re.search(r"^\s*x11\b", out, re.M):
+        return "x11"
+    return "auto"
+
+def kill_stale_mpv():
+    """Mata procesos mpv huérfanos de B.I.O.R. Cam que bloquean el nodo V4L2.
+
+    El driver uvcvideo permite un único consumidor por dispositivo; si una
+    sesión anterior murió sin cerrar mpv (crash o Ctrl+C), el nodo queda
+    ocupado y el nuevo visor recibe ioctl(VIDIOC_QBUF): Bad file descriptor
+    (pantalla negra, fotos y grabación rotas). Esta limpieza es idempotente:
+    se ejecuta al arrancar antes de abrir la cámara."""
+    try:
+        import glob
+        os.makedirs("/tmp", exist_ok=True)
+        for sock in glob.glob("/tmp/mpv-biro-cam-*.sock"):
+            try:
+                os.unlink(sock)
+            except OSError:
+                pass
+        targets = set()
+        for pid_dir in glob.glob("/proc/[0-9]*"):
+            pid = pid_dir.rsplit("/", 1)[-1]
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                    cmd = fh.read().decode("utf-8", "replace").replace("\x00", " ")
+            except OSError:
+                continue
+            if "av://v4l2" in cmd and "input-ipc-server=/tmp/mpv-biro-cam" in cmd:
+                targets.add(int(pid))
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (OSError, ValueError):
+                pass
+        time.sleep(0.5)
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+    except Exception:
+        pass
+
 
 ICON_PATH = os.path.join(APP_DIR, "assets", "icon_256.png")
 SHUTTER_SOUND = os.path.join(os.path.expanduser("~/.cache/biro-cam"), "shutter.wav")
@@ -141,12 +303,15 @@ def list_camera_devices():
             continue
         card_match = re.search(r"Card type\s*:\s*(.+)", info)
         label = card_match.group(1).strip() if card_match else f"Cámara {index + 1}"
+        is_ir = bool(re.search(r"infrared|\bIR\b|: USB2\.0 I$", label, re.IGNORECASE))
+        if is_ir and "[IR]" not in label:
+            label += " [IR / Infrarrojo]"
         path = stable_paths.get(real, real)
         cameras.append((path, label, real))
 
     cameras.sort(key=lambda item: (
         0 if "emeet" in item[1].lower() else 1,
-        1 if "infrared" in item[1].lower() or item[1].rstrip().endswith(" I") else 0,
+        1 if "[ir" in item[1].lower() or "infrared" in item[1].lower() or "infrarrojo" in item[1].lower() else 0,
         item[1].lower(), item[2]))
     return cameras
 
@@ -201,7 +366,13 @@ CAMERAS = list_camera_devices()
 DEV = CAMERAS[0][0] if CAMERAS else ""
 CAM_URL = f"av://v4l2:{DEV}" if DEV else ""
 RESOLUTIONS, CAM_INPUT_FORMAT = camera_modes(DEV) if DEV else (list(DEFAULT_RESOLUTIONS), "mjpeg")
-IPC_SOCK  = "/tmp/mpv-biro-cam.sock"
+def ipc_sock_path():
+    """Socket IPC único por proceso: evita que una instancia hable con un mpv
+    huérfano de otra sesión que todavía tenga abierto el nodo V4L2."""
+    return f"/tmp/mpv-biro-cam-{os.getpid()}.sock"
+
+
+IPC_SOCK = ipc_sock_path()
 PHOTO_DIR = os.path.expanduser("~/Imágenes/Camera")
 VIDEO_DIR = os.path.expanduser("~/Vídeos/Camera")
 SECURITY_DIR = os.path.join(VIDEO_DIR, "Seguridad")
@@ -282,15 +453,30 @@ def timestamp_filter(prefix: str):
 
 # ----------------------------------------------------------------------------- Cámara
 def v4l2_set(ctrl: str, value) -> None:
-    """Ajusta un control de la cámara sin bloquear la UI."""
+    """Ajusta un control de la cámara de forma síncrona para liberar el nodo v4l2."""
+    if not DEV:
+        return
     try:
-        subprocess.Popen(
+        subprocess.run(
             ["v4l2-ctl", "-d", DEV, "-c", f"{ctrl}={value}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env=clean_env()
+            capture_output=True, timeout=1.5, env=clean_env()
         )
-    except FileNotFoundError:
-        print("v4l2-ctl no encontrado (instala v4l-utils)", file=sys.stderr)
+    except Exception:
+        pass
+
+
+def v4l2_set_batch(controls: dict) -> None:
+    """Ajusta múltiples controles V4L2 en una sola llamada síncrona antes de iniciar mpv."""
+    if not DEV or not controls:
+        return
+    ctrl_str = ",".join(f"{k}={v}" for k, v in controls.items())
+    try:
+        subprocess.run(
+            ["v4l2-ctl", "-d", DEV, "-c", ctrl_str],
+            capture_output=True, timeout=1.5, env=clean_env()
+        )
+    except Exception:
+        pass
 
 
 def v4l2_get(ctrl: str):
@@ -361,21 +547,33 @@ def mpv_ipc(command: list) -> None:
 
 
 def mpv_ipc_result(command: list, timeout=3.0):
-    """Ejecuta IPC y devuelve la respuesta de mpv; nunca oculta un error."""
+    """Ejecuta IPC y devuelve la respuesta de comando real de mpv (saltando eventos asíncronos)."""
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
             s.connect(IPC_SOCK)
-            s.sendall((json.dumps({"command": command}) + "\n").encode("utf-8"))
+            req_id = int(time.time() * 1000) % 100000
+            payload = json.dumps({"command": command, "request_id": req_id}) + "\n"
+            s.sendall(payload.encode("utf-8"))
             data = b""
-            while b"\n" not in data:
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < timeout:
                 chunk = s.recv(65536)
                 if not chunk:
                     break
                 data += chunk
-        if not data:
-            return {"error": "mpv no respondió"}
-        return json.loads(data.split(b"\n", 1)[0].decode("utf-8"))
+                while b"\n" in data:
+                    line, data = data.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line.decode("utf-8"))
+                        if "error" in obj or obj.get("request_id") == req_id:
+                            return obj
+                    except Exception:
+                        pass
+            return {"error": "timeout"}
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -1227,7 +1425,7 @@ class Panel(QMainWindow):
         # ---- Preview de los modos QR / Escáner (OpenCV) ----------------------
         self.scan_label = QLabel(self.video)
         self.scan_label.setAlignment(Qt.AlignCenter)
-        self.scan_label.setStyleSheet("background:#000;")
+        self.scan_label.setStyleSheet("background: transparent;")
         self.scan_label.hide()
 
         # Banner de ayuda sobre el preview (mensaje claro, mínima fricción)
@@ -2290,10 +2488,13 @@ class Panel(QMainWindow):
         self._apply_vf()
 
     def _apply_auto_settings(self):
-        v4l2_set("exposure_auto_priority", 0)
-        v4l2_set("auto_exposure", 3 if self.exposure_auto else 1)
-        v4l2_set("focus_automatic_continuous", 1 if self.focus_auto else 0)
-        v4l2_set("white_balance_automatic", 1 if self.wb_auto else 0)
+        batch = {
+            "exposure_auto_priority": 0,
+            "auto_exposure": 3 if self.exposure_auto else 1,
+            "focus_automatic_continuous": 1 if self.focus_auto else 0,
+            "white_balance_automatic": 1 if self.wb_auto else 0,
+        }
+        v4l2_set_batch(batch)
 
     def _begin_camera_warmup(self, launch_id):
         """Oculta cuadros negros mientras RGB recupera exposición tras usar IR."""
@@ -2359,10 +2560,6 @@ class Panel(QMainWindow):
 
     def _vf_chain(self, with_grid=True):
         parts = []
-        if getattr(self, "_scan_scale", False):
-            # Durante QR/Escáner: preview ligero a 720p (capturas rápidas y fluidas).
-            # Se elimina al capturar el documento para obtener resolución completa.
-            parts.append("scale=1280:720:flags=area")
         zoom = self._zoom_filter()
         if zoom:
             parts.append(zoom)
@@ -2665,6 +2862,7 @@ class Panel(QMainWindow):
         details = v4l2_control_details()
         prefix = f"camera/{self._camera_settings_id()}/ctl"
         is_emeet = "emeet" in self.dev_combo.currentText().lower()
+        batch = {}
         for cid, slider in self.sliders.items():
             if cid not in details:
                 slider.setEnabled(False)
@@ -2682,11 +2880,15 @@ class Panel(QMainWindow):
                 value = int(self.settings.value(legacy_key))
             else:
                 value = default
+            if not is_emeet and cid == "gain" and value < default:
+                value = default
             value = max(lo, min(hi, value))
             slider.setValue(value)
             self.value_labels[cid].setText(str(value))
             slider.blockSignals(False)
-            v4l2_set(cid, value)
+            batch[cid] = value
+        if batch:
+            v4l2_set_batch(batch)
 
     def _restore_settings(self):
         s = self.settings
@@ -2772,9 +2974,10 @@ class Panel(QMainWindow):
         if s.contains("device_selector"):
             dev_idx = self.dev_combo.findData(s.value("device_selector"))
             if dev_idx >= 0:
-                self.dev_combo.blockSignals(True)
-                self.dev_combo.setCurrentIndex(dev_idx)
-                self.dev_combo.blockSignals(False)
+                if self.dev_combo.currentIndex() == dev_idx:
+                    self._on_device_changed(dev_idx)
+                else:
+                    self.dev_combo.setCurrentIndex(dev_idx)
 
     def _save_settings(self):
         s = self.settings
@@ -2830,10 +3033,24 @@ class Panel(QMainWindow):
     # ----------------------------------------------------------------- acciones
     def launch_mpv(self):
         """Incrusta el visor mpv dentro del widget de vídeo (--wid)."""
+        if hasattr(self, "mpv_proc") and self.mpv_proc and self.mpv_proc.poll() is None:
+            mpv_ipc(["quit"])
+            try:
+                self.mpv_proc.wait(timeout=1.0)
+            except Exception:
+                self.mpv_proc.terminate()
+            self.mpv_proc = None
+            # El wrapper (flatpak/bwrap) puede morir antes que mpv-bin; darle
+            # tiempo al proceso real de soltar el nodo V4L2 antes de reabrirlo.
+            time.sleep(0.4)
+        try:
+            os.unlink(ipc_sock_path())
+        except OSError:
+            pass
         w, h, fps, _ = RESOLUTIONS[self.res_combo.currentIndex()]
         wid = int(self.video.winId())   # ID de ventana nativa del widget de vídeo
-        args = [
-            mpv_executable(), CAM_URL,
+        args = mpv_base_cmd() + [
+            CAM_URL,
             f"--wid={wid}",                       # render DENTRO de la app
             f"--input-ipc-server={IPC_SOCK}",
             "--no-config",                        # aislado de ~/.config/mpv (sin lua/HUD)
@@ -2843,7 +3060,7 @@ class Panel(QMainWindow):
             "--cache-pause=no", "--framedrop=vo", "--video-sync=display-desync",
             "--video-latency-hacks=yes",
             "--hwdec=no",                         # software MJPEG -> nunca toca el RGA
-            "--vo=gpu", "--gpu-context=x11egl",    # X11 para honrar --wid (NO wayland)
+            "--vo=gpu", "--gpu-context=" + mpv_gpu_context(),  # X11 para --wid (x11egl/x11)
             "--demuxer-lavf-o=" + f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}",
             "--audio=no",                         # sin audio en el visor (se graba aparte)
             "--no-osc", "--osd-level=0", "--really-quiet",
@@ -2855,8 +3072,6 @@ class Panel(QMainWindow):
         env = clean_env()
         env.pop("WAYLAND_DISPLAY", None)
         try:
-            # Evita que la autoexposición reduzca los FPS en poca luz (si la UVC lo soporta).
-            v4l2_set("exposure_auto_priority", 0)
             self.mpv_proc = subprocess.Popen(args, env=env)
             self._camera_launch_id = getattr(self, "_camera_launch_id", 0) + 1
             launch_id = self._camera_launch_id
@@ -3051,7 +3266,7 @@ class Panel(QMainWindow):
         """Convierte la grabación a MP4 (vídeo+audio+efecto) en segundo plano."""
         mkv = self._last_video
         wav = self._audio_wav
-        if not (mkv and os.path.exists(mkv) and os.path.getsize(mkv) > 10240):
+        if not (mkv and os.path.exists(mkv) and os.path.getsize(mkv) > 1024):
             self._flash("⚠ Grabación vacía"); return
         mp4 = os.path.splitext(mkv)[0] + ".mp4"
         temp_mp4 = os.path.splitext(mkv)[0] + ".procesando.mp4"
@@ -3148,9 +3363,8 @@ class Panel(QMainWindow):
             ok, detail = self._media_is_valid(job["temp_mp4"], job["require_audio"])
         if ok:
             output_duration = self._media_duration(job["temp_mp4"])
-            source_duration = max(self._media_duration(job["mkv"]),
-                                  self._media_duration(job["wav"]) if job["wav"] else 0.0)
-            if source_duration > 0 and output_duration < source_duration - 1.0:
+            source_duration = self._media_duration(job["mkv"])
+            if source_duration > 1.0 and output_duration < source_duration - 2.0:
                 ok = False
                 detail = (f"MP4 truncado: {output_duration:.1f} s de "
                           f"{source_duration:.1f} s esperados")
@@ -3232,27 +3446,15 @@ class Panel(QMainWindow):
     _audio_offset = 0.0
 
     def change_resolution(self, idx):
-        """Cambia la resolución de forma fiable: fija la opción del demuxer,
-        recarga el stream y VERIFICA que el vídeo volvió a cargar con el tamaño
-        correcto. Si no carga, reintenta; como último recurso reinicia mpv.
-        (Antes, al bajar y volver a subir, el vídeo podía quedarse en negro en
-        algunas cámaras x86_64, p. ej. la del ASUS ROG G16.)"""
+        """Cambia la resolución reiniciando mpv limpiamente para evitar cuelgues del driver V4L2."""
         if getattr(self, "_res_change_busy", False):
             return
         w, h, fps, label = RESOLUTIONS[idx]
         self.sec_res_combo.setCurrentIndex(idx)
-        if not self.mpv_proc or self.mpv_proc.poll() is not None:
-            self.launch_mpv()
-            return
-        opts = f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}"
-        # Se envían seguidos (sin espera entre ambos): mpv aplica la opción del
-        # demuxer al procesar el replace. Con espera intermedia, en algunas
-        # cámaras el replace reutiliza la opción antigua y no cambia.
-        mpv_ipc(["set_property", "demuxer-lavf-o", opts])
-        mpv_ipc(["loadfile", CAM_URL, "replace"])
         self._res_change_busy = True
         self._res_target = (w, h)
         self._begin_resolution_warmup(label)
+        self.launch_mpv()
         QTimer.singleShot(1500, lambda i=idx: self._verify_resolution(i, 0))
 
     def _verify_resolution(self, idx, attempt):
@@ -4064,7 +4266,24 @@ class Panel(QMainWindow):
         """)
 
 
+def ensure_single_instance():
+    """Garantiza que solo exista 1 instancia activa a la vez para evitar conflictos en el nodo V4L2."""
+    try:
+        import fcntl
+        lock_file = "/tmp/biro-cam-app.lock"
+        lock_fd = open(lock_file, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_fd
+    except (IOError, OSError):
+        print("⚠ B.I.O.R. Cam ya está en ejecución en otra ventana. Cerrando instancia duplicada...", file=sys.stderr)
+        sys.exit(0)
+
+
 def main():
+    _lock = ensure_single_instance()
+    # Si una sesión anterior murió sin cerrar mpv (crash/Ctrl+C), el nodo V4L2
+    # sigue ocupado por un huérfano y la cámara sale en negro. Limpiar primero.
+    kill_stale_mpv()
     # El incrustado de mpv (--wid) necesita X11; bajo Wayland usamos XWayland (xcb).
     if not os.environ.get("QT_QPA_PLATFORM"):
         os.environ["QT_QPA_PLATFORM"] = "xcb"
@@ -4080,9 +4299,45 @@ def main():
     panel.show()
     panel.raise_()             # traer al frente
     panel.activateWindow()     # darle el foco (por si abre detrás)
-    # Pantalla completa al arrancar (F11 para alternar).
-    QTimer.singleShot(150, panel.showFullScreen)
-    sys.exit(app.exec())
+
+    def _cleanup_on_exit():
+        try:
+            if getattr(panel, "_vu_proc", None):
+                panel._vu_proc.kill()
+        except Exception:
+            pass
+        try:
+            if getattr(panel, "_audio_proc", None) and panel._audio_proc.poll() is None:
+                panel._audio_proc.terminate()
+        except Exception:
+            pass
+        try:
+            if panel.mpv_proc and panel.mpv_proc.poll() is None:
+                mpv_ipc(["quit"])
+                try:
+                    panel.mpv_proc.wait(timeout=2)
+                except Exception:
+                    panel.mpv_proc.terminate()
+        except Exception:
+            pass
+        try:
+            os.unlink(ipc_sock_path())
+        except OSError:
+            pass
+
+    def _on_signal(signum, frame):
+        _cleanup_on_exit()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+    app.aboutToQuit.connect(_cleanup_on_exit)
+    try:
+        rc = app.exec()
+    except KeyboardInterrupt:
+        rc = 0
+    _cleanup_on_exit()
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
