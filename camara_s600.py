@@ -68,7 +68,7 @@ def check_kinect_connected():
 
 # ----------------------------------------------------------------------------- Config
 APP_DIR   = os.path.dirname(os.path.abspath(__file__))
-VERSION   = "v2.11.4"
+VERSION   = "v2.11.5"
 
 
 def clean_env(env=None):
