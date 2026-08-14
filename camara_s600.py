@@ -1065,7 +1065,7 @@ class ScanEngine(QObject):
                 os.unlink(path)
             except FileNotFoundError:
                 pass
-        self._timer.start(100)       # ~10 fps con preview a 720p (fluido y ligero)
+        self._timer.start(500 if mode == "qr" else 150)
 
     def stop(self):
         self.active = False
@@ -1091,16 +1091,22 @@ class ScanEngine(QObject):
 
     # ---- bucle de captura ----
     def _process(self):
-        if not self.capturing:
+        if not self.capturing or getattr(self, "_busy", False):
             return
+        self._busy = True
         try:
             self._process_inner()
         except Exception as e:
             print("Error en motor de escaneo:", e)
             self.status.emit("Error en el detector")
+        finally:
+            self._busy = False
 
     def _process_inner(self):
         if not self.capturing:
+            return
+        if self.mode == "qr" and self._last_qr:
+            # Una vez detectado el QR, omitir capturas innecesarias para no pausar el visor GPU
             return
         path = SCAN_FRAMES[self._frame_index]
         self._frame_index = 1 - self._frame_index
@@ -1154,7 +1160,7 @@ class ScanEngine(QObject):
         return self._last_full
 
     # ---- detección QR ----
-    QR_SCALES = (1.0, 0.75, 0.5, 0.35, 0.25, 0.18, 0.12)
+    QR_SCALES = (1.0, 0.5, 0.3)
 
     def _decode_zbar(self, img):
         """Fallback zbar: tolera QRs estilizados/coloreados con logo que el
@@ -1177,26 +1183,29 @@ class ScanEngine(QObject):
         return data, poly.reshape(1, 4, 2)
 
     def _detect_qr(self, small, scale):
-        """Multiescala: el detector clásico falla si el QR ocupa casi todo el cuadro.
-        Si no decodifica, se intenta zbar (mejor con QRs de color/logo)."""
+        """Detección ultra-rápida: intenta zbar PRIMERO (muy ligero, lee QRs coloreados
+        y estilizados), y si no decodifica, prueba OpenCV en pocas escalas."""
         display = small.copy()
         sh, sw = small.shape[:2]
         data, pts, f_ok = "", None, 1.0
         candidate = False
-        for f in self.QR_SCALES:
-            probe = small if f == 1.0 else cv2.resize(
-                small, (int(sw * f), int(sh * f)), interpolation=cv2.INTER_AREA)
-            d, p, _ = self._qr_detector.detectAndDecode(probe)
-            if d:
-                data, pts, f_ok = d, p, f
-                break
-            if p is not None and p.shape[1] >= 4:
-                candidate = True
-        if not data:
-            zdata, zpts = self._decode_zbar(small)
-            if zdata:
-                data, pts, f_ok = zdata, zpts, 1.0
-                candidate = False
+
+        # 1) Probar pyzbar en el frame principal (super rápido)
+        zdata, zpts = self._decode_zbar(small)
+        if zdata:
+            data, pts, f_ok = zdata, zpts, 1.0
+        else:
+            # 2) Fallback a OpenCV en pocas escalas
+            for f in self.QR_SCALES:
+                probe = small if f == 1.0 else cv2.resize(
+                    small, (int(sw * f), int(sh * f)), interpolation=cv2.INTER_AREA)
+                d, p, _ = self._qr_detector.detectAndDecode(probe)
+                if d:
+                    data, pts, f_ok = d, p, f
+                    break
+                if p is not None and p.shape[1] >= 4:
+                    candidate = True
+
         if data and pts is not None and pts.shape[1] >= 4:
             pts_disp = (pts[0].astype(float) / f_ok)      # coords del preview
             pts_i = pts_disp.astype(int)
@@ -1330,10 +1339,12 @@ class ScanEngine(QObject):
 
     # ---- captura del documento ----
     def capture_page(self):
-        """Endereza la página detectada usando el frame a resolución real."""
-        if self._last_full is None or self._page_pts is None:
+        """Endereza la página detectada usando el frame a resolución real. Si no hay bordes, devuelve el cuadro completo."""
+        if self._last_full is None:
             return None
         frame = self._last_full
+        if self._page_pts is None:
+            return frame.copy()
         pts = np.array(self._page_pts, dtype="float32")
         (tl, tr, br, bl) = pts
         out_w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
@@ -1562,7 +1573,7 @@ class Panel(QMainWindow):
         self.btn_videos = QPushButton("🎬 Vídeos")
         self.btn_fotos.setToolTip("Abrir carpeta de fotos (G)")
         self.btn_videos.setToolTip("Abrir carpeta de vídeos (V)")
-        self.btn_fotos.clicked.connect(lambda: subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env()))
+        self.btn_fotos.clicked.connect(self._open_photos)
         self.btn_videos.clicked.connect(self._open_videos)
         for b in (self.btn_fotos, self.btn_videos):
             b.setMinimumHeight(34)
@@ -2102,6 +2113,8 @@ class Panel(QMainWindow):
     # ----------------------------------------------------------------- Métodos de Kinect
     def _on_device_changed(self, idx):
         global DEV, CAM_URL, RESOLUTIONS, CAM_INPUT_FORMAT
+        # Cambio manual de cámara: cancela la verificación de arranque en curso.
+        self._startup_attempt = -1
         if self.scan_active:
             self._exit_scan_mode()
         dev_type = self.dev_combo.currentData()
@@ -2438,6 +2451,12 @@ class Panel(QMainWindow):
             self._on_device_changed(self.dev_combo.currentIndex())
         else:
             self.launch_mpv()
+            # Verificar que el visor realmente cargó vídeo: algunas cámaras
+            # USB (p. ej. la EMEET S600) tardan en estabilizar su stream y el
+            # primer arranque queda en negro. Si no hay frames, se reintenta.
+            self._startup_attempt = 0
+            QTimer.singleShot(2500,
+                              lambda: self._verify_startup_video(0))
 
     # ----------------------------------------------------------------- helpers UI
     def _sep(self):
@@ -2714,6 +2733,10 @@ class Panel(QMainWindow):
     def _bump_zoom(self, delta):
         self.zoom_slider.setValue(max(0, min(100, self.zoom_slider.value() + delta)))
 
+    def _open_photos(self):
+        os.makedirs(PHOTO_DIR, exist_ok=True)
+        subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env())
+
     def _open_videos(self):
         os.makedirs(VIDEO_DIR, exist_ok=True)
         subprocess.Popen(["xdg-open", VIDEO_DIR], env=clean_env())
@@ -2848,7 +2871,7 @@ class Panel(QMainWindow):
             if not has_video or duration <= 0.1:
                 return False, "MP4 sin vídeo reproducible"
             if require_audio and not has_audio:
-                return False, "se solicitó audio pero el MP4 no lo contiene"
+                return True, "sin_audio"
             return True, ""
         except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
             return False, str(exc)
@@ -2923,10 +2946,21 @@ class Panel(QMainWindow):
 
     def _restore_settings(self):
         s = self.settings
+        if s.contains("device_selector"):
+            dev_idx = self.dev_combo.findData(s.value("device_selector"))
+            if dev_idx >= 0:
+                if self.dev_combo.currentIndex() == dev_idx:
+                    self._on_device_changed(dev_idx)
+                else:
+                    self.dev_combo.setCurrentIndex(dev_idx)
         if s.contains("resolution"):
             ridx = int(s.value("resolution"))
-            if 0 <= ridx < len(RESOLUTIONS):
+            if 0 <= ridx < self.res_combo.count():
                 self.res_combo.setCurrentIndex(ridx)
+            else:
+                self.res_combo.setCurrentIndex(0)
+        else:
+            self.res_combo.setCurrentIndex(0)
         self._load_camera_controls()
         if s.contains("zoom"):
             self.zoom_slider.setValue(int(s.value("zoom")))
@@ -3002,13 +3036,6 @@ class Panel(QMainWindow):
                 self.led_combo.setCurrentIndex(idx)
         if s.contains("kinect_tracking"):
             self.tracking_check.setChecked(s.value("kinect_tracking") == "true")
-        if s.contains("device_selector"):
-            dev_idx = self.dev_combo.findData(s.value("device_selector"))
-            if dev_idx >= 0:
-                if self.dev_combo.currentIndex() == dev_idx:
-                    self._on_device_changed(dev_idx)
-                else:
-                    self.dev_combo.setCurrentIndex(dev_idx)
 
     def _save_settings(self):
         s = self.settings
@@ -3332,7 +3359,7 @@ class Panel(QMainWindow):
         cmd += ["-map", "0:v:0"]
         if has_audio:
             cmd += ["-map", "1:a:0"]
-        cmd += ["-c:v", codec, "-b:v", f"{br}M", "-r", str(fps)]
+        cmd += ["-c:v", codec, "-b:v", f"{br}M", "-r", str(fps), "-pix_fmt", "yuv420p"]
         if codec.startswith("hevc"):
             cmd += ["-tag:v", "hvc1"]
         else:
@@ -3367,28 +3394,28 @@ class Panel(QMainWindow):
         if rc is None:
             QTimer.singleShot(500, lambda: self._poll_conversion(pid))
             return
-        if rc != 0 and not job["retried_software"] and job["hardware_codec"].endswith("_rkmpp"):
-            fallback = "libx265" if job["hardware_codec"].startswith("hevc") else "libx264"
-            cmd = list(job["cmd"])
-            codec_pos = cmd.index("-c:v") + 1
-            cmd[codec_pos] = fallback
-            cmd[codec_pos + 1:codec_pos + 1] = ["-preset", "veryfast"]
+        if rc != 0 and not job.get("retried_software", False):
+            fallback_cmd = [
+                "/usr/bin/ffmpeg", "-y", "-i", job["mkv"],
+                "-c:v", "libx264", "-preset", "veryfast", "-tag:v", "avc1",
+                "-movflags", "+faststart", job["temp_mp4"]
+            ]
             if os.path.exists(job["temp_mp4"]):
                 os.unlink(job["temp_mp4"])
             try:
                 with open(job["log"], "ab") as log:
-                    log.write(f"\n--- Reintento automático con {fallback} ---\n".encode())
+                    log.write(b"\n--- Reintento de emergencia con libx264 software ---\n")
                     job["proc"] = subprocess.Popen(
-                        cmd, stdout=subprocess.DEVNULL, stderr=log, env=clean_env())
+                        fallback_cmd, stdout=subprocess.DEVNULL, stderr=log, env=clean_env())
                 job["retried_software"] = True
-                self._flash("⚙ Codificador HW ocupado; reintentando por software…")
+                self._flash("⚙ Reintentando conversión segura H.264…")
                 QTimer.singleShot(500, lambda: self._poll_conversion(pid))
                 return
             except OSError:
                 pass
         self._conversions.pop(pid, None)
         ok = (rc == 0 and os.path.exists(job["temp_mp4"])
-              and os.path.getsize(job["temp_mp4"]) > 10240)
+              and os.path.getsize(job["temp_mp4"]) > 1024)
         detail = ""
         if ok:
             ok, detail = self._media_is_valid(job["temp_mp4"], job["require_audio"])
@@ -3406,8 +3433,12 @@ class Panel(QMainWindow):
             for path in (job["mkv"], job["wav"]):
                 if path and os.path.exists(path):
                     os.unlink(path)
-            self._flash("✅ Vídeo listo")
-            subprocess.Popen(["notify-send", "✅ Vídeo listo", os.path.basename(job["mp4"])], env=clean_env())
+            if detail == "sin_audio":
+                self._flash("✅ Vídeo listo (sin pista de audio)")
+                subprocess.Popen(["notify-send", "✅ Vídeo listo", f"{os.path.basename(job['mp4'])} (sin audio)"], env=clean_env())
+            else:
+                self._flash("✅ Vídeo listo")
+                subprocess.Popen(["notify-send", "✅ Vídeo listo", os.path.basename(job["mp4"])], env=clean_env())
             self._maybe_close_after_conversion()
             return
         if os.path.exists(job["temp_mp4"]):
@@ -3441,10 +3472,9 @@ class Panel(QMainWindow):
                 ok, _ = self._media_is_valid(temp_mp4, require_audio)
                 if ok:
                     output_duration = self._media_duration(temp_mp4)
-                    source_duration = max(self._media_duration(mkv),
-                                          self._media_duration(wav))
-                    ok = not (source_duration > 0
-                              and output_duration < source_duration - 1.0)
+                    source_duration = self._media_duration(mkv)
+                    ok = not (source_duration > 1.0
+                              and output_duration < source_duration - 2.0)
                 if not ok:
                     continue
                 try:
@@ -3477,15 +3507,22 @@ class Panel(QMainWindow):
     _audio_offset = 0.0
 
     def change_resolution(self, idx):
-        """Cambia la resolución reiniciando mpv limpiamente para evitar cuelgues del driver V4L2."""
+        """Cambia la resolución de forma fiable: fija la opción del demuxer,
+        recarga el stream y VERIFICA que el vídeo volvió a cargar con el tamaño
+        correcto. Si no carga, reintenta; como último recurso reinicia mpv."""
         if getattr(self, "_res_change_busy", False):
             return
         w, h, fps, label = RESOLUTIONS[idx]
         self.sec_res_combo.setCurrentIndex(idx)
+        if not self.mpv_proc or self.mpv_proc.poll() is not None:
+            self.launch_mpv()
+            return
+        opts = f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}"
+        mpv_ipc(["set_property", "demuxer-lavf-o", opts])
+        mpv_ipc(["loadfile", CAM_URL, "replace"])
         self._res_change_busy = True
         self._res_target = (w, h)
         self._begin_resolution_warmup(label)
-        self.launch_mpv()
         QTimer.singleShot(1500, lambda i=idx: self._verify_resolution(i, 0))
 
     def _verify_resolution(self, idx, attempt):
@@ -3533,6 +3570,54 @@ class Panel(QMainWindow):
             return {}
         except Exception:
             return {}
+
+    def _verify_startup_video(self, attempt):
+        """Comprueba que el visor cargó vídeo real tras el arranque.
+
+        Algunas cámaras USB (p. ej. la EMEET S600) tardan en estabilizar su
+        stream: el primer mpv abre el nodo pero sin fotogramas (pantalla
+        negra), y solo reaparecía al cambiar a otra cámara y volver. Aquí se
+        verifica video-params y, si no hay vídeo, se reinicia mpv hasta 3
+        veces de forma automática."""
+        if getattr(self, "_startup_attempt", 0) != attempt:
+            return
+        if self.mpv_proc and self.mpv_proc.poll() is not None:
+            # mpv murió: reiniciarlo es la única vía de recuperación.
+            if attempt < 3:
+                self._flash(f"⏳ Visor caído; reintentando… ({attempt + 1}/3)")
+                self._startup_attempt = attempt + 1
+                QTimer.singleShot(800,
+                                  lambda: self._restart_mpv_startup(attempt + 1))
+            return
+        data = self._video_params()
+        dw, dh = data.get("dw", 0), data.get("dh", 0)
+        if dw and dh:
+            self._finish_camera_warmup(self._camera_launch_id)
+            return
+        if attempt < 3:
+            self._flash(f"⏳ Cámara sin señal; reiniciando visor… ({attempt + 1}/3)")
+            self._startup_attempt = attempt + 1
+            QTimer.singleShot(800,
+                              lambda: self._restart_mpv_startup(attempt + 1))
+        else:
+            self._flash("⚠ La cámara no entregó vídeo tras varios intentos")
+
+    def _restart_mpv_startup(self, attempt):
+        """Reinicia mpv en el arranque y vuelve a verificar el vídeo."""
+        try:
+            if self.mpv_proc and self.mpv_proc.poll() is None:
+                mpv_ipc(["quit"])
+                try:
+                    self.mpv_proc.wait(timeout=1.0)
+                except Exception:
+                    self.mpv_proc.terminate()
+        except Exception:
+            pass
+        self.mpv_proc = None
+        time.sleep(0.4)
+        self.launch_mpv()
+        QTimer.singleShot(2500,
+                          lambda: self._verify_startup_video(attempt))
 
     def _begin_resolution_warmup(self, label):
         self.camera_warmup_label.setText(f"Cambiando resolución… {label}")
@@ -3664,21 +3749,26 @@ class Panel(QMainWindow):
         self._scan_last_candidate = None
         vw, vh = self.video.width(), self.video.height()
         self.scan_label.setGeometry(0, 0, vw, vh)
-        self.scan_label.show()
-        self.scan_label.raise_()
-        self.scan_banner.show()
-        self._set_scan_banner("Apunta a un código QR…" if mode == "qr"
-                              else "Coloca el documento frente a la cámara…")
+        
+        if mode == "qr":
+            self.scan_label.hide()
+            self.scan_banner.hide()
+            self._scan_scale = False
+        else:
+            self.scan_label.show()
+            self.scan_label.raise_()
+            self.scan_banner.show()
+            self._set_scan_banner("Coloca el documento frente a la cámara…")
+            self._scan_scale = True
+
         for name in self.SCAN_LOCKED:
             getattr(self, name).setEnabled(False)
         self.scan_panel.show()
         QTimer.singleShot(0, lambda: self.panel_scroll.ensureWidgetVisible(self.scan_panel))
         self._scan_show_live(mode)
-        # Preview a 720p por filtro vf: capturas rápidas -> movimiento fluido
-        self._scan_scale = True
         self._apply_vf()
         self.scan_engine.start(mode)
-        self._flash("📱 Modo QR" if mode == "qr" else "📄 Modo Escáner")
+        self._flash("📱 Modo QR (escaneo fluido)" if mode == "qr" else "📄 Modo Escáner")
 
     def _exit_scan_mode(self):
         if not self.scan_active:
@@ -3715,19 +3805,20 @@ class Panel(QMainWindow):
     def _scan_show_live(self, mode):
         """Vista en vivo: solo el botón de captura (escáner) y el estado."""
         self.scan_capture_btn.setVisible(mode == "scan")
-        self.scan_capture_btn.setEnabled(False)
+        self.scan_capture_btn.setEnabled(mode == "scan")
         for b in (self.scan_copy_btn, self.scan_url_btn, self.scan_save_qr_btn,
                   self.scan_bw_combo, self.scan_save_doc_btn,
                   self.scan_copy_img_btn, self.scan_discard_btn):
             b.setVisible(False)
         self.scan_status.setText(
-            "Detectando QR…" if mode == "qr" else "Buscando el borde del documento…")
+            "Detectando QR…" if mode == "qr" else "Listo para capturar el documento…")
 
     # ---- callbacks del motor ----
     def _scan_frame_cb(self, frame):
         if not self.scan_active:
             return
-        self._scan_display(frame)
+        if self.scan_mode == "scan":
+            self._scan_display(frame)
 
     def _scan_display(self, frame):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -3746,12 +3837,12 @@ class Panel(QMainWindow):
         data = (data or "").strip()
         self._scan_qr_data = data
         short = data if len(data) <= 90 else data[:90] + "…"
-        self._set_scan_banner(f"QR detectado: {short}")
         self.scan_status.setText(f"✓ Código QR:\n{short}")
         self.scan_url_btn.setVisible(self._is_url(data))
         self.scan_copy_btn.setVisible(True)
         self.scan_save_qr_btn.setVisible(True)
         QTimer.singleShot(0, lambda: self.panel_scroll.ensureWidgetVisible(self.scan_panel))
+        self._flash(f"🎯 QR: {short}")
         self._play_shutter()   # confirmación suave
 
     @staticmethod
@@ -3759,16 +3850,9 @@ class Panel(QMainWindow):
         return bool(re.match(r"^(https?://|www\.)[^\s]+$", data, re.IGNORECASE))
 
     def _scan_on_candidate(self, found):
-        """Guía en vivo: hay un QR casi en foco pero sin decodificar aún."""
+        """En modo QR se omite el banner de texto para mantener la vista limpia."""
         if not self.scan_active or self.scan_mode != "qr":
             return
-        if self._scan_qr_data or found == self._scan_last_candidate:
-            return
-        self._scan_last_candidate = found
-        if found:
-            self._set_scan_banner("QR detectado — aleja o centra un poco el código")
-        else:
-            self._set_scan_banner("Apunta a un código QR…")
 
     def _scan_on_page(self, found):
         if not self.scan_active or self.scan_mode != "scan":
@@ -3776,14 +3860,11 @@ class Panel(QMainWindow):
         if found == self._scan_page_found:
             return
         self._scan_page_found = found
+        self.scan_capture_btn.setEnabled(True)
         if found:
-            self.scan_capture_btn.setEnabled(True)
-            self._set_scan_banner("Página detectada — pulsa Capturar")
             self.scan_status.setText("✓ Documento enmarcado.\nPulsa «Capturar página».")
         else:
-            self.scan_capture_btn.setEnabled(False)
-            self._set_scan_banner("Coloca el documento frente a la cámara…")
-            self.scan_status.setText("Buscando el borde del documento…")
+            self.scan_status.setText("Listo para capturar el documento.")
 
     # ---- captura del documento ----
     def _scan_capture_page(self):
