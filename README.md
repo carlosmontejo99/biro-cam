@@ -89,6 +89,10 @@ Xbox 360 Kinect.
 - `v4l2-ctl` (v4l-utils), FFmpeg y mpv del sistema. En Bazzite también se
   detecta automáticamente `io.mpv.Mpv` instalado desde Flatpak. PySide6/Python
   van bundleados.
+- `libzbar.so.0` (zbar) va bundleada dentro del AppImage para que el detector
+  QR pueda leer QRs estilizados/coloreados con logo (p. ej. el QR rojo de
+  YouTube) mediante pyzbar; OpenCV multiescala sigue siendo el camino rápido
+  para los QR convencionales en blanco y negro.
 
 ## Vídeo incrustado
 La cámara se muestra DENTRO de la ventana (mpv embebido con `--wid`). Requiere X11, así que

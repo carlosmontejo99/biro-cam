@@ -175,3 +175,11 @@ _Última actualización: 2026-08-13 — B.I.O.R. Cam v2.11.0_
   (`INTER_AREA`) y corrige el chequeo de puntos `pts.shape[1]>=4` que impedía
   aceptar QRs decodificados; si el detector ve patrones sin decodificar, el
   banner guía: «aleja o centra un poco el código».
+- **QRs estilizados (13-ago, v2.11.0):** el detector clásico de OpenCV no puede
+  leer QRs con logo o de color (p. ej. el QR rojo de YouTube). Se añadió un
+  fallback con **zbar** (`pyzbar`, sin nuevas dependencias de Python pesadas:
+  `libzbar.so.0` va bundleada dentro del AppImage y se instala `libzbar0` en el
+  runner de GitHub Actions para ambas arquitecturas). La cadena queda:
+  OpenCV multiescala primero (rápido) → si no decodifica, zbar. Así el QR de
+  YouTube (`https://m.youtube.com/`) se detecta y los B&W siguen siendo
+  instantáneos.

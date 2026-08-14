@@ -819,6 +819,7 @@ class ScanEngine(QObject):
         self._page_pts = None        # esquinas de la página (4,2) en coords completas
         self._last_full = None       # último frame a resolución real (para guardar)
         self._qr_detector = cv2.QRCodeDetector()
+        self._zbar_decode = None     # import lazy de pyzbar (solo si se usa)
 
     # ---- ciclo de vida ----
     def start(self, mode):
@@ -926,8 +927,29 @@ class ScanEngine(QObject):
     # ---- detección QR ----
     QR_SCALES = (1.0, 0.75, 0.5, 0.35, 0.25, 0.18, 0.12)
 
+    def _decode_zbar(self, img):
+        """Fallback zbar: tolera QRs estilizados/coloreados con logo que el
+        detector clásico de OpenCV no lee (p. ej. el QR rojo de YouTube)."""
+        try:
+            if self._zbar_decode is None:
+                from pyzbar.pyzbar import decode as _zb
+                self._zbar_decode = _zb
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+            found = self._zbar_decode(gray)
+        except Exception:
+            return "", None
+        if not found:
+            return "", None
+        r = found[0]
+        data = r.data.decode("utf-8", "replace")
+        poly = np.array([[p.x, p.y] for p in r.polygon], dtype=np.float32)
+        if len(poly) != 4:
+            return "", None
+        return data, poly.reshape(1, 4, 2)
+
     def _detect_qr(self, small, scale):
-        """Multiescala: el detector clásico falla si el QR ocupa casi todo el cuadro."""
+        """Multiescala: el detector clásico falla si el QR ocupa casi todo el cuadro.
+        Si no decodifica, se intenta zbar (mejor con QRs de color/logo)."""
         display = small.copy()
         sh, sw = small.shape[:2]
         data, pts, f_ok = "", None, 1.0
@@ -941,6 +963,11 @@ class ScanEngine(QObject):
                 break
             if p is not None and p.shape[1] >= 4:
                 candidate = True
+        if not data:
+            zdata, zpts = self._decode_zbar(small)
+            if zdata:
+                data, pts, f_ok = zdata, zpts, 1.0
+                candidate = False
         if data and pts is not None and pts.shape[1] >= 4:
             pts_disp = (pts[0].astype(float) / f_ok)      # coords del preview
             pts_i = pts_disp.astype(int)

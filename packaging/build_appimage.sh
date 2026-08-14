@@ -148,6 +148,18 @@ if [ ! -e "$QTLIB/libxcb-cursor.so.0" ]; then
     else echo "   ! AVISO: no se encontró libxcb-cursor en pkgs de conda"; fi
 fi
 
+echo ">> Bundleando libzbar (la necesita pyzbar para leer QRs estilizados con logo)…"
+if [ ! -e "$QTLIB/libzbar.so.0" ] && [ ! -e "$APPDIR/usr/lib/libzbar.so.0" ]; then
+    ZBAR=$(ldconfig -p 2>/dev/null | awk '/libzbar\.so\.0/{print $NF; exit}')
+    if [ -n "$ZBAR" ] && [ -f "$ZBAR" ]; then
+        cp -a "$ZBAR" "$QTLIB/libzbar.so.0"
+        ln -sf libzbar.so.0 "$QTLIB/libzbar.so"
+        echo "   + libzbar.so.0 copiada desde $ZBAR"
+    else
+        echo "   ! AVISO: no se encontró libzbar.so.0 en el sistema"
+    fi
+fi
+
 echo ">> Adelgazando el bundle (cachés, tests, headers)…"
 find "$APPDIR/usr" -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
 find "$APPDIR/usr" -type d -name "tests" -path "*/site-packages/*" -prune -exec rm -rf {} + 2>/dev/null || true
