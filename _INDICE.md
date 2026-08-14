@@ -205,3 +205,10 @@ _Última actualización: 2026-08-13 — B.I.O.R. Cam v2.11.0_
     con un filtro `crop+scale` en el `vf` de mpv (no el `video-zoom` de salida,
     que no se capturaba), y al convertir la grabación a MP4 se replica el mismo
     filtro. Foto y MP4 salen con el zoom aplicado (1x–3x).
+- **Cambio de resolución fiable (13-ago, v2.11.4):** al bajar la resolución y
+  volver a subirla, el vídeo podía quedarse en negro (sobre todo en x86_64).
+  Ahora `change_resolution` verifica con `video-params` que el stream volvió a
+  cargar con el tamaño pedido; si no, reintenta la recarga (hasta 3 veces) y
+  como último recurso reinicia mpv por completo (equivale al arranque, que sí
+  carga). Se muestra un aviso «Cambiando resolución…» durante el proceso.
+  Verificado en aarch64 con el ciclo 720p→4K→1080p→4K.

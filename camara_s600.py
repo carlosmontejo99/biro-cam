@@ -3232,13 +3232,114 @@ class Panel(QMainWindow):
     _audio_offset = 0.0
 
     def change_resolution(self, idx):
+        """Cambia la resolución de forma fiable: fija la opción del demuxer,
+        recarga el stream y VERIFICA que el vídeo volvió a cargar con el tamaño
+        correcto. Si no carga, reintenta; como último recurso reinicia mpv.
+        (Antes, al bajar y volver a subir, el vídeo podía quedarse en negro en
+        algunas cámaras x86_64, p. ej. la del ASUS ROG G16.)"""
+        if getattr(self, "_res_change_busy", False):
+            return
         w, h, fps, label = RESOLUTIONS[idx]
         self.sec_res_combo.setCurrentIndex(idx)
-        mpv_ipc(["set_property", "demuxer-lavf-o",
-                 f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}"])
+        if not self.mpv_proc or self.mpv_proc.poll() is not None:
+            self.launch_mpv()
+            return
+        opts = f"video_size={w}x{h},input_format={CAM_INPUT_FORMAT},framerate={fps}"
+        # Se envían seguidos (sin espera entre ambos): mpv aplica la opción del
+        # demuxer al procesar el replace. Con espera intermedia, en algunas
+        # cámaras el replace reutiliza la opción antigua y no cambia.
+        mpv_ipc(["set_property", "demuxer-lavf-o", opts])
         mpv_ipc(["loadfile", CAM_URL, "replace"])
-        QTimer.singleShot(800, self._apply_view_state)  # re-aplicar zoom tras recargar
-        self._flash(f"🎞 Resolución: {label}")
+        self._res_change_busy = True
+        self._res_target = (w, h)
+        self._begin_resolution_warmup(label)
+        QTimer.singleShot(1500, lambda i=idx: self._verify_resolution(i, 0))
+
+    def _verify_resolution(self, idx, attempt):
+        w, h, fps, label = RESOLUTIONS[idx]
+        data = self._video_params()
+        dw, dh = data.get("dw", 0), data.get("dh", 0)
+        if (dw, dh) in ((w, h), (h, w)):
+            self._finish_resolution_change(restart=False)
+            self._flash(f"🎞 Resolución: {label}")
+            return
+        if attempt < 3:
+            self._flash(f"⏳ Reintentando {label}…")
+            mpv_ipc(["loadfile", CAM_URL, "replace"])
+            QTimer.singleShot(1500, lambda i=idx, a=attempt + 1: self._verify_resolution(i, a))
+        else:
+            self._flash("⚠ El visor no cargó la resolución; reiniciando…")
+            self._finish_resolution_change(restart=True, idx=idx)
+
+    def _video_params(self):
+        """Lee video-params de mpv saltando los eventos asíncronos que pueden
+        llegar antes de la respuesta del comando en el socket IPC."""
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(2.0)
+                s.connect(IPC_SOCK)
+                s.sendall((json.dumps(
+                    {"command": ["get_property", "video-params"]}) + "\n").encode("utf-8"))
+                data = b""
+                while b"\n" not in data:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                for line in data.split(b"\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line.decode("utf-8"))
+                    except Exception:
+                        continue
+                    if "event" in obj:
+                        continue
+                    return obj.get("data") or {}
+            return {}
+        except Exception:
+            return {}
+
+    def _begin_resolution_warmup(self, label):
+        self.camera_warmup_label.setText(f"Cambiando resolución… {label}")
+        self.camera_warmup_label.setGeometry(0, 0, self.video.width(), self.video.height())
+        self.camera_warmup_label.show()
+        self.camera_warmup_label.raise_()
+        self.btn_photo.setEnabled(False)
+        if not self.recording:
+            self.btn_rec.setEnabled(False)
+
+    def _finish_resolution_change(self, restart=False, idx=None):
+        self._res_change_busy = False
+        self.camera_warmup_label.hide()
+        self.btn_photo.setEnabled(True)
+        self.btn_rec.setEnabled(True)
+        if restart:
+            self._restart_mpv_for_resolution(idx)
+        else:
+            self._apply_view_state()
+
+    def _restart_mpv_for_resolution(self, idx=None):
+        """Recuperación final: reinicia el visor desde cero con la resolución
+        pedida (equivale al arranque inicial, que sí carga)."""
+        try:
+            if self.mpv_proc and self.mpv_proc.poll() is None:
+                mpv_ipc(["quit"])
+                try:
+                    self.mpv_proc.wait(timeout=1.5)
+                except Exception:
+                    self.mpv_proc.terminate()
+        except Exception:
+            pass
+        self.mpv_proc = None
+        self._res_change_busy = False
+        if idx is not None:
+            w, h, fps, _ = RESOLUTIONS[idx]
+            self.res_combo.blockSignals(True)
+            self.res_combo.setCurrentIndex(idx)
+            self.res_combo.blockSignals(False)
+        QTimer.singleShot(250, self.launch_mpv)
 
     def preset_lowlight(self):
         """Aclara sombras sin quemar la imagen, respetando cada cámara."""

@@ -72,6 +72,9 @@ Xbox 360 Kinect.
 - El zoom digital se hornea en la foto y en el vídeo guardado (filtro `crop+scale`
   en el `vf`, replicado al convertir a MP4); el panel lateral es redimensionable
   arrastrando el borde (splitter) para dejar más espacio al vídeo
+- Cambiar la resolución verifica que el vídeo volvió a cargar y reintenta o
+  reinicia el visor si se queda en negro (evita el fallo al bajar y volver a
+  subir la resolución en x86_64)
 
 ## Arquitectura
 - `camara_s600.py` — panel Qt/PySide6. Lanza mpv con `--hwdec=no` (decode software →
