@@ -1358,19 +1358,24 @@ class ScanEngine(QObject):
         return cv2.warpPerspective(frame, M, (out_w, out_h))
 
     @staticmethod
-    def enhance(img, mode="bw"):
-        """Aplica el estilo de salida al documento enderezado (sin perder el original)."""
-        if mode == "color":
+    def enhance(img, mode="original"):
+        """Aplica el estilo de salida al documento enderezado sin perder la imagen auténtica."""
+        if mode == "original" or mode == "color_natural" or img is None:
+            return img.copy()
+        elif mode == "color":
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
             l = clahe.apply(l)
             out = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
-            return cv2.convertScaleAbs(out, alpha=1.03, beta=6)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                   cv2.THRESH_BINARY, 31, 15)
-        return cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
+            return out
+        elif mode == "bw":
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            blur = cv2.bilateralFilter(gray, 9, 75, 75)
+            th = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY, 21, 6)
+            return cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
+        return img.copy()
 
 
 # ----------------------------------------------------------------------------- UI
@@ -1636,8 +1641,9 @@ class Panel(QMainWindow):
 
         doc_res = QHBoxLayout()
         self.scan_bw_combo = QComboBox()
-        self.scan_bw_combo.addItem("B/N automático", "bw")
-        self.scan_bw_combo.addItem("Color natural", "color")
+        self.scan_bw_combo.addItem("🎨 Color natural (Fidedigno)", "original")
+        self.scan_bw_combo.addItem("📄 B/N documento", "bw")
+        self.scan_bw_combo.addItem("✨ Color mejorado", "color")
         self.scan_bw_combo.setToolTip("Estilo de salida del documento escaneado")
         self.scan_bw_combo.currentIndexChanged.connect(self._scan_preview_result)
         self.scan_save_doc_btn = QPushButton("💾 Guardar")
@@ -3977,18 +3983,25 @@ class Panel(QMainWindow):
     def _scan_save_qr(self):
         pts = self.scan_engine.last_qr_pts
         full = self.scan_engine.last_full
-        if pts is None or full is None:
-            self._flash("⚠ QR no disponible para guardar")
+        if full is None:
+            self._flash("⚠ No hay captura disponible para guardar")
             return
         os.makedirs(QR_DIR, exist_ok=True)
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         path = os.path.join(QR_DIR, f"QR_{ts}.png")
-        x, y, w, h = cv2.boundingRect(pts)
-        x, y = max(0, x - 20), max(0, y - 20)
-        w = min(full.shape[1] - x, w + 40)
-        h = min(full.shape[0] - y, h + 40)
-        ok = cv2.imwrite(path, full[y:y + h, x:x + w])
-        self._flash("💾 QR guardado" if ok else "⚠ No se pudo guardar el QR")
+        if pts is not None and pts.shape[1] >= 4:
+            x, y, w, h = cv2.boundingRect(pts)
+            x, y = max(0, x - 30), max(0, y - 30)
+            w = min(full.shape[1] - x, w + 60)
+            h = min(full.shape[0] - y, h + 60)
+            crop = full[y:y + h, x:x + w]
+            ok = cv2.imwrite(path, crop if crop.size > 0 else full)
+        else:
+            ok = cv2.imwrite(path, full)
+        if ok:
+            self._flash("💾 QR guardado en la carpeta QR")
+        else:
+            self._flash("⚠ No se pudo guardar el QR")
 
     # ----------------------------------------------------------------- seguridad
     def _toggle_security(self):

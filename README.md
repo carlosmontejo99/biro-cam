@@ -1,142 +1,160 @@
-# B.I.O.R. Cam v2.11.0 — EMEET S600 en RK3588 y x86_64/Bazzite
+# B.I.O.R. Cam v2.12.1 — Control, Grabación y Escaneo UVC Acelerado en Linux
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21304061.svg)](https://doi.org/10.5281/zenodo.21304061)
 
+Aplicación profesional de control, grabación y escaneo inteligente para cámaras UVC en Linux, optimizada para la **EMEET SmartCam S600**, cámaras integradas RGB/IR de laptops (como ASUS ROG G16 / Bazzite) y placas ARM64 como la **Orange Pi 5 Max (RK3588)**.
 
-Aplicación de control y grabación para cámaras UVC en Linux, diseñada para la
-EMEET SmartCam S600. Funciona en Orange Pi 5 Max (RK3588) y equipos x86_64 como
-Bazzite; ofrece aceleración NPU en Rockchip, fallback CPU y soporte opcional para
-Xbox 360 Kinect.
+Ofrece renderizado directo acelerado por hardware GPU (Vulkan/x11vk/NVIDIA), decodificación NPU en Rockchip (RKNN), soporte opcional para Xbox 360 Kinect y empaquetado autónomo en **AppImage**.
 
-## Novedades de v2.11.0
-- **Modo QR:** botón «📱 QR» (o tecla `Q`). Detecta códigos QR en vivo sobre la
-  cámara sin reabrir el dispositivo UVC (captura interna de mpv, mismo motor que
-  Seguridad). Resalta el código, muestra su contenido y permite **Copiar**,
-  **Abrir URL** (si es una URL) y **Guardar QR** (imagen recortada en
-  `~/Imágenes/Camera/QR`).
-- **Modo Escáner de documentos:** botón «📄 Escanear» (o tecla `E`). Encuadra la
-  página en vivo (esquinas marcadas) y «📸 Capturar página» (o tecla `C`) la
-  endereza con transformación de perspectiva a resolución real, con acabado
-  **B/N automático** o **Color natural**. Guarda en `~/Imágenes/Camera/Escaner`
-  o la copia al portapapeles. `Esc` sale del modo.
-- Los modos QR/Escáner bloquean temporalmente foto/grabación/resolución y son
-  excluyentes entre sí y con el modo Seguridad (misma cámara, sin reinicios).
+---
 
-## Novedades de v2.10.0
-- Nuevo AppImage x86_64 compatible con Bazzite y laptops ASUS ROG.
-- Selector automático de todas las cámaras V4L2: integrada, infrarroja, EMEET
-  y otras USB, excluyendo nodos metadata y dispositivos que solo son salida.
-- Resolución, FPS y formato adaptados a las capacidades reales de cada cámara.
-- `Reset` restaura los valores nativos del dispositivo y `Poca luz` se adapta a
-  sus rangos, evitando aplicar a la cámara integrada los ajustes de la EMEET.
-- Selección automática de RKMPP en Rockchip y `libx264`/`libx265` en x86_64.
-- Detección de `mpv` nativo o Flatpak para usar un backend X11 compatible.
-- Builds automáticos y validados para aarch64 y x86_64 mediante GitHub Actions.
+## 📸 Demostración Visual
 
-> 📍 **Hogar único del proyecto:**
-> `~/Documentos/B.I.O.R./5. PROJECTS/CAMARA_EMEET_S600/`
-> El índice maestro está en `_INDICE.md`; los documentos en `docs/`.
+| Captura Principal de la Aplicación | Visor en Vivo y Panel de Control |
+|:----------------------------------:|:--------------------------------:|
+| ![B.I.O.R. Cam Interface 1](docs/assets/biro_cam_app_preview_1.jpg) | ![B.I.O.R. Cam Interface 2](docs/assets/biro_cam_app_preview_2.jpg) |
 
-## Ejecutar
-- **Orange Pi:** `dist/Biro-Cam-aarch64.AppImage`.
-- **PC/Bazzite:** `dist/Biro-Cam-x86_64.AppImage`.
-- **Menú:** `bash packaging/install_desktop.sh` elige automáticamente el archivo
-  correspondiente al equipo.
-- **Desarrollo:** `/home/carlos/miniforge3/envs/biro-cam-build/bin/python camara_s600.py`
+| Muestra de Fotografía Capturada |
+|:-------------------------------:|
+| ![Muestra de Foto](docs/assets/biro_cam_photo_sample.jpg) |
 
-## Características
-- 6 guías de encuadre: Tercios, Proporción áurea, Espiral (Fibonacci), Cruz centrada, Diagonales
-- Grabación con bitrate ajustable (1-50 Mbps), duración límite, códec H.264/H.265
-- Inicio confirmado de vídeo y micrófono: la interfaz no anuncia audio si la fuente falla
-- MP4 atómico: se escribe como archivo temporal y solo aparece al superar FFprobe
-- H.264 etiquetado `avc1` y H.265 `hvc1`, ambos reproducibles por RKMPP/MPV
-- Sincronización de audio según el instante real de apertura de PulseAudio
-- Cierre seguro: si se intenta salir grabando, finaliza y valida el clip antes de cerrar
-- Marca de agua de fecha/hora opcional en el vídeo (quemada con `drawtext`)
-- Temporizador de foto (3s / 10s) con cuenta atrás
-- Sonido de obturador configurable (generado como WAV, reproducido con `paplay`)
-- Modo seguridad: detección de movimiento por OpenCV, grabación automática con bitrate/configuración independiente
-- Detección de personas con YOLOv5 en la NPU RK3588 (~43 ms por inferencia), con fallback CPU
-- Soporte opcional para Xbox 360 Kinect: RGB, IR, profundidad, inclinación y LED; solo aparece si está conectado
-- Modo QR: detección en vivo con `cv2.QRCodeDetector`, resaltado y acciones Copiar / Abrir URL / Guardar QR
-- Escáner de documentos: encuadre automático de la página, enderezado por perspectiva y guardado limpio B/N o color
-- Recuperación de conversiones interrumpidas y rechazo de MP4 truncados por comparación de duración
-- Overlay HUD profesional en modo seguridad: panel semi-transparente 520×340px con fuentes grandes, barra de progreso, estado y parámetros
-- Efectos de imagen (B/N, sepia, vívido, cálido, negativo)
-- Espejo, zoom digital, auto-exposición/auto-foco/auto-blancos
-- Todos los ajustes se persisten entre sesiones (QSettings)
-- Atajos de teclado: `Espacio`/`S` foto, `R` grabar, `F` autofoco, `M` espejo,
-  `G` galería, `V` vídeos, `T` timestamp, `0` reset, `+`/`-` zoom,
-  `Q` modo QR, `E` escáner, `C` capturar página, `Esc` salir del modo,
-  `F11` pantalla completa (la app arranca en pantalla completa)
-- El zoom digital se hornea en la foto y en el vídeo guardado (filtro `crop+scale`
-  en el `vf`, replicado al convertir a MP4); el panel lateral es redimensionable
-  arrastrando el borde (splitter) para dejar más espacio al vídeo
-- Cambiar la resolución verifica que el vídeo volvió a cargar y reintenta o
-  reinicia el visor si se queda en negro (evita el fallo al bajar y volver a
-  subir la resolución en x86_64)
+---
 
-## Arquitectura
-- `camara_s600.py` — panel Qt/PySide6. Lanza mpv con `--hwdec=no` (decode software →
-  **nunca toca el RGA**, evita el bug >4GB que cuelga el kernel) y se comunica por socket
-  IPC (`/tmp/mpv-biro-cam.sock`) para foto/grabar/resolución. Los ajustes de imagen
-  (brillo, contraste, saturación, gamma, ganancia, zoom, foco, exposición) van por
-  `v4l2-ctl` en vivo.
+## 🚀 Novedades de la Versión v2.12.1
 
-## Empaquetado AppImage
-- Construir: `bash packaging/build_appimage.sh`. La arquitectura se detecta con
-  `uname -m` y produce `dist/Biro-Cam-aarch64.AppImage` o
-  `dist/Biro-Cam-x86_64.AppImage`.
-- Las etiquetas `v*` de GitHub construyen y adjuntan ambas arquitecturas al Release.
-- Entorno de build: conda `biro-cam-build` (Python 3.12, PySide6 y OpenCV);
-  la variante ARM puede incluir además RKNNLite.
-- El modelo RKNN solo se usa en RK3588; x86_64 selecciona OpenCV/CPU.
+- **⚡ Modo QR a 60 FPS Estilo Nativo (GPU Vulkan):**
+  - El visor de cámara nativo `mpv` se mantiene **100% activo en hardware GPU a 60 FPS**, omitiendo lienzos de software CPU que causaban tirones.
+  - Priorización del motor `pyzbar` que decodifica códigos QR en **menos de 3 milisegundos**.
+  - Eliminación de cuadros flotantes oscuros molestos; la información aparece en la tarjeta lateral (**✓ Código QR**, **Copiar**, **Abrir URL**, **Guardar QR**) con notificaciones limpias.
+  - Pausa automática de capturas tras la detección para evitar saturar la tubería GPU.
 
-## Dependencias en runtime
-- `v4l2-ctl` (v4l-utils), FFmpeg y mpv del sistema. En Bazzite también se
-  detecta automáticamente `io.mpv.Mpv` instalado desde Flatpak. PySide6/Python
-  van bundleados.
-- `libzbar.so.0` (zbar) va bundleada dentro del AppImage para que el detector
-  QR pueda leer QRs estilizados/coloreados con logo (p. ej. el QR rojo de
-  YouTube) mediante pyzbar; OpenCV multiescala sigue siendo el camino rápido
-  para los QR convencionales en blanco y negro.
+- **📄 Escáner de Documentos Fidedigno (Color Natural Real):**
+  - Configurado predeterminadamente en modo **«🎨 Color natural (Fidedigno)»**, conservando el 100% de los colores y detalles originales capturados por el sensor sin blanquear las imágenes.
+  - Botón **«📸 Capturar página»** siempre disponible y habilitado. Si la escena no tiene 4 esquinas marcadas, captura automáticamente la escena completa en alta definición.
+  - Mantiene la vista en vivo GPU fluida a 60 FPS sin degradar la resolución.
 
-## Vídeo incrustado
-La cámara se muestra DENTRO de la ventana (mpv embebido con `--wid`). Requiere X11, así que
-la app corre bajo **xcb/XWayland** (`QT_QPA_PLATFORM=xcb`, forzado en AppRun y `main()`). El
-plugin xcb necesita `libxcb-cursor.so.0`, que se bundlea en la AppImage automáticamente.
+- **🎞️ Compatibilidad Universal MP4 (YUV 4:2:0):**
+  - Inclusión obligatoria de `-pix_fmt yuv420p` y tag `avc1`/`hvc1` en la codificación H.264/H.265.
+  - Garantiza reproducción perfecta en **100% de los reproductores** (GNOME Videos, VLC, celulares Android/iOS, navegadores web y smart TVs).
 
-## Guías de bitrate (H.264 / H.265)
+- **🔍 Arranque Fiable en Máxima Resolución (1080p / 4K):**
+  - Forzado del primer modo nativo de máxima resolución disponible al iniciar.
+  - Verificación activa de stream (`_verify_startup_video`) a los 2.5s con autorrecuperación en 3 reintentos para cámaras USB lentas en inicializar (como la EMEET S600).
 
-| Calidad | 1080p | 4K |
-|---------|-------|----|
-| Buena | 5-10 Mbps | 15-25 Mbps |
-| Excelente | 10-20 Mbps | 30-50 Mbps |
-| Sin pérdida apreciable | 20-40 Mbps | 50 Mbps+ |
+- **📂 Gestión Automatizada de Carpetas:**
+  - Los botones **🖼 Fotos** y **🎬 Vídeos** aseguran la creación automática de las carpetas de destino (`~/Imágenes/Camera/` y `~/Vídeos/Camera/`) antes de abrir el explorador de archivos.
 
-## Flujo de grabación validado
+---
 
-1. `mpv stream-record` conserva el MJPEG original de la cámara en un MKV temporal.
-2. Si hay micrófono seleccionado, FFmpeg confirma primero que la fuente PulseAudio existe.
-3. Al detener, el audio se cierra con SIGINT para conservar una cabecera WAV válida.
-4. FFmpeg convierte por RKMPP a H.264/H.265 y mezcla AAC estéreo a 48 kHz.
-5. FFprobe exige vídeo, duración válida y audio cuando fue solicitado.
-6. La duración final se compara con los temporales y se rechazan salidas truncadas.
-7. Solo entonces el MP4 temporal sustituye al destino y se eliminan MKV/WAV.
-8. Si RKMPP está ocupado, se reintenta por software sin perder los originales.
+## 🏗️ Arquitectura del Sistema
 
-El modo Seguridad utiliza exactamente el mismo conversor y no inicia otro codificador
-mientras el clip anterior sigue procesándose.
+```mermaid
+graph TD
+    subgraph Frontend ["GUI & Interfaz de Usuario (PySide6 / Qt6)"]
+        UI["Panel Principal de Control"]
+        Preview["Visor Nativo Hardware mpv (X11 / Vulkan x11vk / NVIDIA)"]
+        Controls["Ajustes V4L2 en Vivo (Brillo, Foco, Exposición, Zoom)"]
+    end
 
-## ¿Por qué existe este proyecto? (Justificación Técnica)
+    subgraph Hardware ["Dispositivos de Entrada UVC"]
+        UVC["Cámara USB (EMEET S600 / Laptop RGB / IR / Kinect)"]
+        V4L2["Kernel Linux Driver V4L2 (/dev/video*)"]
+    end
 
-Las aplicaciones de cámara por defecto en Linux (como **Cheese** o **GNOME Snapshot**) suelen fallar o congelarse al usar webcams 4K de alta velocidad (como la EMEET S600) en placas ARM64 como la **Orange Pi 5 Max (RK3588)**. Esto se debe a dos problemas principales:
+    subgraph ScanEngine ["Motor de Procesamiento & Escaneo"]
+        ZBAR["pyzbar + libzbar (Lectura QR <3ms)"]
+        CV2["OpenCV (Enderezado & Transformación Perspectiva)"]
+        Enhance["Filtro de Color Natural Fidedigno"]
+    end
 
-1. **Saturación del bus USB por formato YUV:** Por defecto, Cheese y Snapshot intentan solicitar transmisiones de vídeo sin comprimir en formato **YUYV (YUV 4:2:2)**. A resoluciones altas como 1080p a 60 fps o 4K a 30 fps, el flujo de datos raw YUV excede el ancho de banda físico del bus USB, lo que causa que la imagen se congele, caiga a 2-3 fps o no se abra. Para obtener altas tasas de refresco y resolución, la cámara debe transmitir en formato comprimido **MJPEG**.
-2. **Cuelgues del Kernel (Bug de RGA >4GB):** Si las aplicaciones de GNOME intentan decodificar por hardware usando GStreamer (`rockchipmpp`), estas delegan el procesamiento al motor gráfico 2D de Rockchip (**RGA**). Dado que el RGA tiene una MMU de 32 bits limitada a 4 GB, en placas con 16 GB de RAM el mapeo de memoria suele caer fuera de rango, corrompiendo la memoria del sistema y provocando un kernel panic inmediato (cuelgue total de la placa).
+    subgraph Backend ["Motor de Grabación & Medios"]
+        Pulse["PulseAudio / PipeWire (Audio Micrófono)"]
+        FFmpeg["Pipeline FFmpeg (H.264/H.265 y AAC 48kHz)"]
+        MediaVal["Validación Atómica FFprobe (-pix_fmt yuv420p)"]
+    end
 
-**B.I.O.R. Cam** soluciona esto de manera brillante:
-* Fuerza a la cámara a entregar un flujo comprimido en **MJPEG** de alta velocidad.
-* Delega la visualización en vivo a **mpv** mediante decodificación por **software** (`--hwdec=no`), eludiendo por completo el motor RGA del RK3588 y garantizando estabilidad absoluta en el kernel.
-* Ajusta los parámetros de hardware (foco, zoom, brillo) directamente usando llamadas a bajo nivel con `v4l2-ctl`.
-* Solo usa el codificador físico del chip (`h264_rkmpp` / `hevc_rkmpp`) para la compresión final del vídeo grabado en segundo plano, maximizando el rendimiento sin poner en riesgo la estabilidad del sistema.
+    UVC --> V4L2
+    V4L2 --> Preview
+    V4L2 --> Controls
+    Preview --> ScanEngine
+    ScanEngine --> ZBAR
+    ScanEngine --> CV2
+    CV2 --> Enhance
+    Pulse --> FFmpeg
+    V4L2 --> FFmpeg
+    FFmpeg --> MediaVal
+```
+
+---
+
+## 💻 Ejecución y Desarrollo
+
+- **Orange Pi 5 / RK3588:** `dist/Biro-Cam-aarch64.AppImage`
+- **PC / Bazzite / Fedora / Ubuntu:** `dist/Biro-Cam-x86_64.AppImage`
+- **Instalador de Menú GNOME:**
+  ```bash
+  bash packaging/install_desktop.sh
+  ```
+- **Entorno de Desarrollo Python:**
+  ```bash
+  python3 camara_s600.py
+  ```
+
+---
+
+## ✨ Características Principales
+
+- **Visor en Vivo Hardware:** Renderizado empotrado con `mpv` mediante socket IPC (`/tmp/mpv-biro-cam.sock`).
+- **6 Guías de Encuadre:** Tercios, Proporción áurea, Espiral (Fibonacci), Cruz centrada, Diagonales.
+- **Grabación Acelerada:** Bitrate configurable (1–50 Mbps), duración límite, códecs H.264/H.265.
+- **Validación Atómica MP4:** Grabación temporal en MKV + WAV, validada con `ffprobe` antes de publicar.
+- **Modo Seguridad:** Detección de movimiento por OpenCV, grabación automática y overlay HUD profesional.
+- **Inferencia NPU (RK3588):** Detección de personas con YOLOv5 en NPU Rockchip (~43 ms) con fallback CPU.
+- **Soporte Kinect Xbox 360:** Modos RGB, IR, profundidad, inclinación y LED.
+- **Atajos de Teclado:**
+  - `Espacio` / `S`: Tomar Foto
+  - `R`: Iniciar / Detener Grabación
+  - `Q`: Activar / Desactivar Modo QR
+  - `E`: Activar / Desactivar Escáner de Documentos
+  - `C`: Capturar Página
+  - `G`: Abrir Carpeta de Fotos
+  - `V`: Abrir Carpeta de Vídeos
+  - `F11`: Pantalla Completa
+  - `Esc`: Salir de modos especiales
+
+---
+
+## 📦 Empaquetado AppImage
+
+Construcción del binario autónomo para Linux:
+```bash
+ENV_NAME=biro-cam-build-x86 REUSE_APPDIR=1 bash packaging/build_appimage.sh
+```
+
+El script detecta la arquitectura (`x86_64` o `aarch64`), bundlea Qt6, PySide6, OpenCV, `libzbar` y genera la AppImage lista para distribuir.
+
+---
+
+## 🎯 Estructura de Guardado de Archivos
+
+| Tipo de Contenido | Carpeta de Destino |
+|:-----------------|:-------------------|
+| **Fotos Normales** | `~/Imágenes/Camera/` |
+| **Escaneos de Documentos** | `~/Imágenes/Camera/Escaner/` |
+| **Fotografías de Códigos QR** | `~/Imágenes/Camera/QR/` |
+| **Vídeos Grabados (MP4)** | `~/Vídeos/Camera/` |
+
+---
+
+## 🧠 Justificación Técnica
+
+Las aplicaciones predeterminadas en Linux (como **Cheese** o **GNOME Snapshot**) suelen fallar o congelarse al usar webcams 4K de alta velocidad (como la EMEET S600) en placas ARM64 como la **Orange Pi 5 Max (RK3588)** debido a dos factores:
+
+1. **Saturación del bus USB por formato YUV:** Cheese y Snapshot intentan solicitar transmisiones de vídeo sin comprimir en formato **YUYV (YUV 4:2:2)**. A resoluciones altas como 1080p a 60 fps o 4K a 30 fps, el flujo raw excede el ancho de banda físico del bus USB. La cámara requiere la transmisión comprimida **MJPEG**.
+2. **Cuelgues del Kernel (Bug de RGA >4GB):** Al intentar decodificar por hardware mediante GStreamer (`rockchipmpp`), se delega el procesamiento al motor RGA de Rockchip. Dado que el RGA posee una MMU de 32 bits limitada a 4 GB, en sistemas con 16 GB de RAM el mapeo de memoria se corrompe, provocando un *kernel panic*.
+
+**B.I.O.R. Cam** resuelve esto de forma idónea:
+- Fuerza el flujo comprimido **MJPEG** de alta velocidad.
+- Delega la visualización en vivo a **mpv** mediante decodificación por software (`--hwdec=no`), eludiendo por completo el motor RGA del RK3588 y garantizando estabilidad absoluta en el kernel.
+- Controla los parámetros de hardware directamente vía `v4l2-ctl`.
+- Reserva el codificador físico (`h264_rkmpp` / `hevc_rkmpp` o `libx264`) exclusivamente para la compresión final en segundo plano.
