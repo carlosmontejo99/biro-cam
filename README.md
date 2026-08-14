@@ -8,11 +8,19 @@ Ofrece renderizado directo acelerado por hardware GPU (Vulkan/x11vk/NVIDIA), dec
 
 ---
 
-## 📸 Demostración Visual
+## 📸 Demostración Visual y Galería de Pruebas
 
-| Captura Principal de la Aplicación | Visor en Vivo y Panel de Control |
+| Interfaz Principal de la Aplicación | Visor en Vivo y Panel de Control |
 |:----------------------------------:|:--------------------------------:|
 | ![B.I.O.R. Cam Interface 1](docs/assets/biro_cam_app_preview_1.jpg) | ![B.I.O.R. Cam Interface 2](docs/assets/biro_cam_app_preview_2.jpg) |
+
+| Captura de Alta Definición | Detección y Prueba de Cámara |
+|:-------------------------:|:----------------------------:|
+| ![Captura Feature 1](docs/assets/biro_cam_feature_shot1.jpg) | ![Captura Feature 2](docs/assets/biro_cam_feature_shot2.jpg) |
+
+| Evaluación de Renderizado Nítido | Prueba de Enfoque y Exposición |
+|:-------------------------------:|:------------------------------:|
+| ![Captura Feature 3](docs/assets/biro_cam_feature_shot3.jpg) | ![Captura Feature 4](docs/assets/biro_cam_feature_shot4.jpg) |
 
 | Muestra de Fotografía Capturada |
 |:-------------------------------:|
