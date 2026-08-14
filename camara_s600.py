@@ -38,7 +38,7 @@ from PySide6.QtCore import Qt, QTimer, QSettings, QEvent, QProcess, QObject, Sig
 from PySide6.QtGui import QIcon, QPixmap, QShortcut, QKeySequence, QImage
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QMainWindow, QProgressBar, QPushButton, QScrollArea, QSlider,
+    QMainWindow, QProgressBar, QPushButton, QScrollArea, QSlider, QSplitter,
     QVBoxLayout, QWidget,
 )
 
@@ -1166,7 +1166,6 @@ class Panel(QMainWindow):
         self.video.setObjectName("video")
         self.video.setAttribute(Qt.WA_NativeWindow, True)   # ventana nativa -> winId para mpv
         self.video.setMinimumSize(480, 360)
-        outer.addWidget(self.video, 1)
 
         # Algunas cámaras dobles (RGB + IR), como la del ASUS ROG, comparten
         # sensor/controlador. Al volver de IR, la exposición RGB tarda varios
@@ -1244,7 +1243,8 @@ class Panel(QMainWindow):
         # ---- Panel de controles (derecha) ---------------------------------
         self.panel = QWidget()
         self.panel.setObjectName("panel")
-        self.panel.setFixedWidth(390)
+        self.panel.setMinimumWidth(340)
+        self.panel.setMaximumWidth(560)
         lay = QVBoxLayout(self.panel)
         lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(5)
@@ -1254,7 +1254,16 @@ class Panel(QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setObjectName("panel_scroll")
-        outer.addWidget(scroll)
+        self.panel_scroll = scroll
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(6)
+        self.splitter.addWidget(self.video)      # 0
+        self.splitter.addWidget(scroll)          # 1
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([1100, 390])
+        outer.addWidget(self.splitter)
         self.emeet_widgets = []
 
         # ---- Header: logo + título + estado del visor ---------------------
@@ -1298,8 +1307,40 @@ class Panel(QMainWindow):
         lay.addWidget(self.dev_select_box)
         lay.addWidget(self._sep())
 
-        # ---- Modos: QR / Escáner de documentos (arriba: el resultado del QR
-        # aparece sin necesidad de bajar el panel) ---------------------------
+
+        # ---- Acciones: captura ---------------------------------------------
+        top = QHBoxLayout()
+        self.btn_photo = QPushButton("● Foto")
+        self.btn_rec   = QPushButton("⏺ Grabar")
+        self.btn_photo.setToolTip("Tomar foto (Espacio / S)")
+        self.btn_rec.setToolTip("Iniciar / Detener grabación (R)")
+        self.timer_combo = QComboBox()
+        self.timer_combo.addItems(["Ahora", "3s", "10s"])
+        self.timer_combo.setMinimumWidth(85)
+        self.timer_combo.setToolTip("Temporizador: toma la foto con retardo")
+        self.btn_photo.clicked.connect(self.take_photo)
+        self.btn_rec.clicked.connect(self.toggle_record)
+        for b in (self.btn_photo, self.btn_rec):
+            b.setMinimumHeight(38)
+            top.addWidget(b)
+        top.addSpacing(6)
+        top.addWidget(self.timer_combo)
+        lay.addLayout(top)
+
+        # ---- Acciones: abrir carpetas (fotos / vídeos) ---------------------
+        gal = QHBoxLayout()
+        self.btn_fotos  = QPushButton("🖼 Fotos")
+        self.btn_videos = QPushButton("🎬 Vídeos")
+        self.btn_fotos.setToolTip("Abrir carpeta de fotos (G)")
+        self.btn_videos.setToolTip("Abrir carpeta de vídeos (V)")
+        self.btn_fotos.clicked.connect(lambda: subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env()))
+        self.btn_videos.clicked.connect(self._open_videos)
+        for b in (self.btn_fotos, self.btn_videos):
+            b.setMinimumHeight(34)
+            gal.addWidget(b)
+        lay.addLayout(gal)
+
+        # ---- Modos: QR / Escáner de documentos -----------------------------
         self.modes_box = QWidget()
         modes_lay = QHBoxLayout(self.modes_box)
         modes_lay.setContentsMargins(0, 0, 0, 0)
@@ -1375,40 +1416,6 @@ class Panel(QMainWindow):
         sp_lay.addLayout(doc_res)
         self.scan_panel.hide()
         lay.addWidget(self.scan_panel)
-        lay.addWidget(self._sep())
-
-
-        # ---- Acciones: captura ---------------------------------------------
-        top = QHBoxLayout()
-        self.btn_photo = QPushButton("● Foto")
-        self.btn_rec   = QPushButton("⏺ Grabar")
-        self.btn_photo.setToolTip("Tomar foto (Espacio / S)")
-        self.btn_rec.setToolTip("Iniciar / Detener grabación (R)")
-        self.timer_combo = QComboBox()
-        self.timer_combo.addItems(["Ahora", "3s", "10s"])
-        self.timer_combo.setMinimumWidth(85)
-        self.timer_combo.setToolTip("Temporizador: toma la foto con retardo")
-        self.btn_photo.clicked.connect(self.take_photo)
-        self.btn_rec.clicked.connect(self.toggle_record)
-        for b in (self.btn_photo, self.btn_rec):
-            b.setMinimumHeight(38)
-            top.addWidget(b)
-        top.addSpacing(6)
-        top.addWidget(self.timer_combo)
-        lay.addLayout(top)
-
-        # ---- Acciones: abrir carpetas (fotos / vídeos) ---------------------
-        gal = QHBoxLayout()
-        self.btn_fotos  = QPushButton("🖼 Fotos")
-        self.btn_videos = QPushButton("🎬 Vídeos")
-        self.btn_fotos.setToolTip("Abrir carpeta de fotos (G)")
-        self.btn_videos.setToolTip("Abrir carpeta de vídeos (V)")
-        self.btn_fotos.clicked.connect(lambda: subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env()))
-        self.btn_videos.clicked.connect(self._open_videos)
-        for b in (self.btn_fotos, self.btn_videos):
-            b.setMinimumHeight(34)
-            gal.addWidget(b)
-        lay.addLayout(gal)
 
         # ---- Calidad de foto -----------------------------------------------
         pq_row = QHBoxLayout()
@@ -1643,6 +1650,7 @@ class Panel(QMainWindow):
         self.mirror = False
         self.effect = ""
         self.grid = 0
+        self._zoom_factor = 1.0            # zoom digital por vf (1x..3x)
 
         lay.addSpacing(4)
         lay.addWidget(self._sep())
@@ -2223,9 +2231,20 @@ class Panel(QMainWindow):
         v4l2_set(cid, value); vlab.setText(str(value))
 
     def _on_zoom(self, v):
-        # Zoom digital por software de mpv (el control v4l2 de esta cámara no hace nada).
-        # 0-100% -> video-zoom 0..1.585 (log2) = 1x..3x.
-        mpv_ipc(["set_property", "video-zoom", round((v / 100.0) * 1.585, 3)])
+        # Zoom digital por filtro vf (crop+scale) en lugar de video-zoom:
+        # así el zoom queda "horneado" en la foto (screenshot tras vf) y se puede
+        # replicar en el MP4 final. 0-100% -> 1x..3x.
+        self._zoom_factor = 1.0 + (v / 100.0) * 2.0
+        self._apply_vf()
+
+    def _zoom_filter(self):
+        """Filtro lavfi que recorta el centro y lo escala de vuelta al tamaño
+        original (zoom digital incluido en foto y vídeo)."""
+        z = float(getattr(self, "_zoom_factor", 1.0))
+        if z <= 1.001:
+            return ""
+        return (f"crop=iw/{z:.4f}:ih/{z:.4f}:(iw-iw/{z:.4f})/2:(ih-ih/{z:.4f})/2,"
+                f"scale=trunc(iw*{z:.4f}/2)*2:trunc(ih*{z:.4f}/2)*2")
 
     def _on_bitrate(self, v):
         self.bitrate_value_label.setText(f"{v} Mbps")
@@ -2344,6 +2363,9 @@ class Panel(QMainWindow):
             # Durante QR/Escáner: preview ligero a 720p (capturas rápidas y fluidas).
             # Se elimina al capturar el documento para obtener resolución completa.
             parts.append("scale=1280:720:flags=area")
+        zoom = self._zoom_filter()
+        if zoom:
+            parts.append(zoom)
         if self.mirror:
             parts.append("hflip")
         if self.effect:
@@ -2450,9 +2472,16 @@ class Panel(QMainWindow):
             "E": lambda: self._toggle_scan_mode("scan"),
             "C": self._scan_capture_page,
             "Esc": self._exit_scan_mode,
+            "F11": self._toggle_fullscreen,
         }
         for key, fn in binds.items():
             QShortcut(QKeySequence(key), self, activated=fn)
+
+    def _toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
 
     def _bump_zoom(self, delta):
         self.zoom_slider.setValue(max(0, min(100, self.zoom_slider.value() + delta)))
@@ -2918,6 +2947,7 @@ class Panel(QMainWindow):
             self._audio_proc = None
             mic = self.mic_combo.currentData()    # nombre de la fuente o None
             self._rec_effect = self.effect        # efecto fijado para esta grabación
+            self._rec_zoom = self._zoom_factor    # zoom aplicado en el MP4 final
             self._rec_bitrate = self.bitrate_slider.value()
             self._rec_timestamp = self.ts_checkbox.isChecked()
             self._rec_codec = CODECS[self.codec_combo.currentIndex()][1]
@@ -3030,6 +3060,11 @@ class Panel(QMainWindow):
         codec = getattr(self, "_rec_codec", CODECS[0][1])
         timestamp_file = ""
         filters = []
+        z = float(getattr(self, "_rec_zoom", 1.0))
+        if z > 1.001:
+            filters.append(
+                f"crop=iw/{z:.4f}:ih/{z:.4f}:(iw-iw/{z:.4f})/2:(ih-ih/{z:.4f})/2,"
+                f"scale=trunc(iw*{z:.4f}/2)*2:trunc(ih*{z:.4f}/2)*2")
         if fx:
             filters.append(fx)
         if ts_enabled:
@@ -3303,6 +3338,7 @@ class Panel(QMainWindow):
         for name in self.SCAN_LOCKED:
             getattr(self, name).setEnabled(False)
         self.scan_panel.show()
+        QTimer.singleShot(0, lambda: self.panel_scroll.ensureWidgetVisible(self.scan_panel))
         self._scan_show_live(mode)
         # Preview a 720p por filtro vf: capturas rápidas -> movimiento fluido
         self._scan_scale = True
@@ -3381,6 +3417,7 @@ class Panel(QMainWindow):
         self.scan_url_btn.setVisible(self._is_url(data))
         self.scan_copy_btn.setVisible(True)
         self.scan_save_qr_btn.setVisible(True)
+        QTimer.singleShot(0, lambda: self.panel_scroll.ensureWidgetVisible(self.scan_panel))
         self._play_shutter()   # confirmación suave
 
     @staticmethod
@@ -3942,6 +3979,8 @@ def main():
     panel.show()
     panel.raise_()             # traer al frente
     panel.activateWindow()     # darle el foco (por si abre detrás)
+    # Pantalla completa al arrancar (F11 para alternar).
+    QTimer.singleShot(150, panel.showFullScreen)
     sys.exit(app.exec())
 
 

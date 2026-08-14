@@ -67,7 +67,11 @@ Xbox 360 Kinect.
 - Todos los ajustes se persisten entre sesiones (QSettings)
 - Atajos de teclado: `Espacio`/`S` foto, `R` grabar, `F` autofoco, `M` espejo,
   `G` galería, `V` vídeos, `T` timestamp, `0` reset, `+`/`-` zoom,
-  `Q` modo QR, `E` escáner, `C` capturar página, `Esc` salir del modo
+  `Q` modo QR, `E` escáner, `C` capturar página, `Esc` salir del modo,
+  `F11` pantalla completa (la app arranca en pantalla completa)
+- El zoom digital se hornea en la foto y en el vídeo guardado (filtro `crop+scale`
+  en el `vf`, replicado al convertir a MP4); el panel lateral es redimensionable
+  arrastrando el borde (splitter) para dejar más espacio al vídeo
 
 ## Arquitectura
 - `camara_s600.py` — panel Qt/PySide6. Lanza mpv con `--hwdec=no` (decode software →

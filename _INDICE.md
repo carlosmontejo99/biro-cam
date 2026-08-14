@@ -190,5 +190,18 @@ _Última actualización: 2026-08-13 — B.I.O.R. Cam v2.11.0_
   enmarca la nota adhesiva incluso sobre fondos claros. El panel de controles
   se compactó (márgenes y espaciado menores) y los botones **QR / Escanear** y
   su panel de resultados se movieron arriba, justo bajo el selector de
-  dispositivo: al detectar un QR, el enlace y sus botones aparecen sin tener
+  dispositivo:   al detectar un QR, el enlace y sus botones aparecen sin tener
   que bajar la barra.
+- **Ergonomía + zoom real (13-ago, v2.11.3):**
+  - Los botones **QR / Escanear** y su panel de resultados se reubicaron
+    **debajo de la fila Fotos/Vídeos** (QR no es la herramienta principal);
+    al entrar en un modo o detectar un QR, el panel hace **auto-scroll** para
+    mostrar el resultado sin bajar la barra a mano.
+  - La app **arranca en pantalla completa** (`F11` alterna).
+  - El **panel lateral es redimensionable** (splitter arrastrable, 340–560px):
+    ya no queda un ancho fijo que deje espacio muerto; puedes encogerlo para
+    dar más sitio al vídeo.
+  - El **zoom digital ahora se hornea en la foto y en el vídeo**: se implementa
+    con un filtro `crop+scale` en el `vf` de mpv (no el `video-zoom` de salida,
+    que no se capturaba), y al convertir la grabación a MP4 se replica el mismo
+    filtro. Foto y MP4 salen con el zoom aplicado (1x–3x).
