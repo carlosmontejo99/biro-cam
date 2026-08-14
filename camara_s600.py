@@ -2741,15 +2741,31 @@ class Panel(QMainWindow):
     def _bump_zoom(self, delta):
         self.zoom_slider.setValue(max(0, min(100, self.zoom_slider.value() + delta)))
 
+    def _open_folder_native(self, target_dir):
+        os.makedirs(target_dir, exist_ok=True)
+        env = dict(os.environ)
+        for k in list(env.keys()):
+            if k.startswith(("QT_", "PYTHON", "LD_")) or k in ("APPIMAGE", "APPDIR", "ARGV0"):
+                env.pop(k, None)
+        if "LD_LIBRARY_PATH_ORIG" in os.environ:
+            env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH_ORIG"]
+
+        for cmd in (["nautilus", target_dir], ["dolphin", target_dir], ["pcmanfm", target_dir], ["thunar", target_dir], ["xdg-open", target_dir]):
+            if shutil.which(cmd[0]):
+                try:
+                    subprocess.Popen(cmd, env=env)
+                    self._flash(f"📂 Carpeta abierta ({cmd[0]})")
+                    return
+                except Exception as exc:
+                    print("Error lanzando gestor de archivos:", cmd[0], exc)
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target_dir))
+
     def _open_photos(self):
-        os.makedirs(PHOTO_DIR, exist_ok=True)
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(PHOTO_DIR)):
-            subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env())
+        self._open_folder_native(PHOTO_DIR)
 
     def _open_videos(self):
-        os.makedirs(VIDEO_DIR, exist_ok=True)
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(VIDEO_DIR)):
-            subprocess.Popen(["xdg-open", VIDEO_DIR], env=clean_env())
+        self._open_folder_native(VIDEO_DIR)
 
     def _set_locked(self, locked):
         # Bloquea (visualmente atenuado + 🔒) controles de grabación.

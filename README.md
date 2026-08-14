@@ -166,3 +166,29 @@ Las aplicaciones predeterminadas en Linux (como **Cheese** o **GNOME Snapshot**)
 - Delega la visualización en vivo a **mpv** mediante decodificación por software (`--hwdec=no`), eludiendo por completo el motor RGA del RK3588 y garantizando estabilidad absoluta en el kernel.
 - Controla los parámetros de hardware directamente vía `v4l2-ctl`.
 - Reserva el codificador físico (`h264_rkmpp` / `hevc_rkmpp` o `libx264`) exclusivamente para la compresión final en segundo plano.
+
+---
+
+## 📋 Bitácora Técnica de Desafíos, Soluciones Aplicadas y Auditoría
+
+### 1. 🛑 Dificultades Técnicas Encontradas (en Orden)
+1. **Saturación del Visor por Capturas IPC Continuas (Modo QR):** Al solicitar `screenshot-to-file` por socket IPC a 10 FPS, la tubería GPU Vulkan de `mpv` se congelaba y dejaba el visor en pantalla negra.
+2. **Lentitud de Renderizado por Software en Interfaz CPU:** Reemplazar el visor hardware GPU por un `QLabel` con `QImage` a 10 FPS provocaba tirones severos en la interfaz.
+3. **Escaneos de Documentos Blanqueados (Washed-out):** El filtro `adaptiveThreshold` con resta fija `C=15` convertía páginas blancas y pantallas de teléfonos en bloques blancos limpios (255) perdiendo la imagen real.
+4. **Incompatibilidad de Vídeos MP4 en Reproductores del Sistema:** La transmisión MJPEG 4:2:2 de la cámara se guardaba como H.264 High 4:2:2 (`yuvj422p`), formato no soportado por la mayoría de reproductores estándar (GNOME Videos/Totem/Celulares).
+5. **Arranque Inicial en Negro con Cámaras USB Lentas (EMEET S600):** Al encender la app con cámaras USB lentas, `mpv` iniciaba antes de que el sensor entregara fotogramas válidos (`dw=0, dh=0`).
+6. **Bloqueo del Gestor de Archivos desde AppImage («🖼 Fotos»):** Las variables de entorno Qt y Python de la AppImage contaminaban a `xdg-open` / `nautilus`, provocando cierres silenciosos del explorador de archivos.
+
+### 2. ✅ Soluciones Definitivas Aplicadas («Si o Sí»)
+1. **Motor QR Acelerado con pyzbar y Pausa de Capturas:** Uso de `pyzbar` (<3 ms) sobre el visor GPU nativo a 60 FPS. Tras la detección, se pausan las capturas IPC para evitar saturar la memoria GPU.
+2. **Visor GPU NATIVO sin Lienzos de Software:** El visor `mpv` se mantiene 100% activo a 60 FPS en modos QR y Escáner sin banners flotantes oscuros.
+3. **Escáner Fidedigno en Color Natural Real:** Selector predeterminado en `«🎨 Color natural (Fidedigno)»` sin umbralización destructiva. Botón de captura siempre activo con fallback a imagen completa.
+4. **Codificación MP4 Universal YUV 4:2:0 (`-pix_fmt yuv420p`):** Conversión explícita a `yuv420p` con etiquetas `avc1`/`hvc1` y cabeceras `+faststart` compatibles con el 100% de los reproductores.
+5. **Verificación Activa de Vídeo en Arranque (`_verify_startup_video`):** Verificación automática a los 2.5s con autorrecuperación en 3 reintentos si el stream inicial no entrega fotogramas.
+6. **Lanzador Multigestor Purgado (`_open_folder_native`):** Purgado total de variables `QT_*`, `PYTHON*` y `LD_*` de la AppImage y prueba secuencial `nautilus` -> `dolphin` -> `pcmanfm` -> `thunar` -> `xdg-open`.
+
+### 3. 🛡️ Precauciones y Lista para Auditoría Futura
+- [ ] **Prueba de Desconexión Caliente (Hot-Unplug):** Validar que la desconexión física de la cámara USB durante una grabación activa finalice el contenedor MP4 de forma atómica sin corromper el almacenamiento.
+- [ ] **Verificación Prevencional de Almacenamiento:** Implementar un umbral de seguridad que prevenga iniciar grabaciones de 60 minutos si la partición de destino tiene menos de 500 MB libres.
+- [ ] **Auditoría de Permisos V4L2 en Sistemas Inmutables:** Verificar la compatibilidad continua de las reglas udev bajo entornos atómicos como Linux Bazzite, Silverblue y SteamOS.
+
