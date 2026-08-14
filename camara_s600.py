@@ -588,6 +588,10 @@ def mpv_ipc(command: list) -> None:
         s.settimeout(1.0)
         s.connect(IPC_SOCK)
         s.sendall((json.dumps({"command": command}) + "\n").encode("utf-8"))
+        try:
+            s.recv(4096)  # Espera respuesta de mpv antes de cerrar para garantizar ejecución del comando
+        except Exception:
+            pass
         s.close()
     except (FileNotFoundError, ConnectionRefusedError, OSError):
         pass  # mpv aún no arranca o ya cerró; se ignora
@@ -2568,6 +2572,12 @@ class Panel(QMainWindow):
         }
         v4l2_set_batch(batch)
 
+    def _ensure_buttons_enabled(self):
+        if not getattr(self, "security_active", False) and not getattr(self, "_photo_timer_active", False):
+            self.btn_photo.setEnabled(True)
+            self.btn_rec.setEnabled(True)
+            self.camera_warmup_label.hide()
+
     def _begin_camera_warmup(self, launch_id):
         """Oculta cuadros negros mientras RGB recupera exposición tras usar IR."""
         self.camera_warmup_label.setGeometry(0, 0, self.video.width(), self.video.height())
@@ -2578,13 +2588,14 @@ class Panel(QMainWindow):
             self.btn_rec.setEnabled(False)
         self._flash("Ajustando exposición de la cámara…")
         QTimer.singleShot(4200, lambda: self._finish_camera_warmup(launch_id))
+        QTimer.singleShot(5000, self._ensure_buttons_enabled)
 
     def _finish_camera_warmup(self, launch_id):
-        if launch_id != self._camera_launch_id:
-            return
         self.camera_warmup_label.hide()
         self.btn_photo.setEnabled(True)
         self.btn_rec.setEnabled(True)
+        if launch_id != self._camera_launch_id:
+            return
         self._flash("Cámara lista")
 
     def _apply_auto_settings_if_current(self, launch_id):
@@ -3696,6 +3707,7 @@ class Panel(QMainWindow):
         self.btn_photo.setEnabled(False)
         if not self.recording:
             self.btn_rec.setEnabled(False)
+        QTimer.singleShot(4000, self._ensure_buttons_enabled)
 
     def _finish_resolution_change(self, restart=False, idx=None):
         self._res_change_busy = False
