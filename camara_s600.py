@@ -406,15 +406,29 @@ def ipc_sock_path():
 
 
 IPC_SOCK = ipc_sock_path()
-PHOTO_DIR = os.path.expanduser("~/Imágenes/Camera")
-VIDEO_DIR = os.path.expanduser("~/Vídeos/Camera")
+
+
+def _get_xdg_dir(xdg_name, fallback_rel):
+    try:
+        res = subprocess.check_output(["xdg-user-dir", xdg_name], text=True).strip()
+        if res and os.path.exists(res):
+            return res
+    except Exception:
+        pass
+    return os.path.expanduser(fallback_rel)
+
+PICS_BASE = _get_xdg_dir("PICTURES", "~/Imágenes")
+VIDS_BASE = _get_xdg_dir("VIDEOS", "~/Vídeos")
+
+PHOTO_DIR    = os.path.join(PICS_BASE, "Camera")
+VIDEO_DIR    = os.path.join(VIDS_BASE, "Camera")
 SECURITY_DIR = os.path.join(VIDEO_DIR, "Seguridad")
-RUNTIME_DIR = os.path.expanduser("~/.cache/biro-cam")
+RUNTIME_DIR  = os.path.expanduser("~/.cache/biro-cam")
 SECURITY_FRAMES = ("/tmp/biro-cam-security-frame-a.jpg",
                    "/tmp/biro-cam-security-frame-b.jpg")
 
-SCAN_DIR   = os.path.expanduser("~/Imágenes/Camera/Escaner")
-QR_DIR     = os.path.expanduser("~/Imágenes/Camera/QR")
+SCAN_DIR    = os.path.join(PHOTO_DIR, "Escaner")
+QR_DIR      = os.path.join(PHOTO_DIR, "QR")
 SCAN_FRAMES = ("/tmp/biro-cam-scan-frame-a.jpg",
                "/tmp/biro-cam-scan-frame-b.jpg")
 
@@ -2463,7 +2477,7 @@ class Panel(QMainWindow):
             # USB (p. ej. la EMEET S600) tardan en estabilizar su stream y el
             # primer arranque queda en negro. Si no hay frames, se reintenta.
             self._startup_attempt = 0
-            QTimer.singleShot(2500,
+            QTimer.singleShot(4200,
                               lambda: self._verify_startup_video(0))
 
     # ----------------------------------------------------------------- helpers UI
@@ -2717,8 +2731,8 @@ class Panel(QMainWindow):
             "Space": self.take_photo, "S": self.take_photo,
             "R": self.toggle_record, "F": self.btn_foc_auto.click,
             "M": self._toggle_mirror,
-            "G": lambda: subprocess.Popen(["xdg-open", PHOTO_DIR], env=clean_env()),
-            "V": lambda: subprocess.Popen(["xdg-open", VIDEO_DIR], env=clean_env()),
+            "G": self._open_photos,
+            "V": self._open_videos,
             "T": lambda: self.ts_checkbox.setChecked(not self.ts_checkbox.isChecked()),
             "0": self.preset_reset,
             "+": lambda: self._bump_zoom(10), "=": lambda: self._bump_zoom(10),
@@ -2745,12 +2759,19 @@ class Panel(QMainWindow):
         os.makedirs(target_dir, exist_ok=True)
         env = dict(os.environ)
         for k in list(env.keys()):
-            if k.startswith(("QT_", "PYTHON", "LD_")) or k in ("APPIMAGE", "APPDIR", "ARGV0"):
+            if k.startswith(("QT_", "PYTHON", "LD_", "XDG_DATA_DIRS", "GDK_", "GTK_")) or k in ("APPIMAGE", "APPDIR", "ARGV0"):
                 env.pop(k, None)
         if "LD_LIBRARY_PATH_ORIG" in os.environ:
             env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH_ORIG"]
 
-        for cmd in (["nautilus", target_dir], ["dolphin", target_dir], ["pcmanfm", target_dir], ["thunar", target_dir], ["xdg-open", target_dir]):
+        try:
+            subprocess.Popen(["xdg-open", target_dir], env=env)
+            self._flash(f"📂 Carpeta abierta: {os.path.basename(target_dir)}")
+            return
+        except Exception as exc:
+            print("xdg-open error:", exc)
+
+        for cmd in (["nautilus", target_dir], ["dolphin", target_dir], ["pcmanfm", target_dir], ["thunar", target_dir]):
             if shutil.which(cmd[0]):
                 try:
                     subprocess.Popen(cmd, env=env)
@@ -3642,7 +3663,7 @@ class Panel(QMainWindow):
         self.mpv_proc = None
         time.sleep(0.4)
         self.launch_mpv()
-        QTimer.singleShot(2500,
+        QTimer.singleShot(4200,
                           lambda: self._verify_startup_video(attempt))
 
     def _begin_resolution_warmup(self, label):
