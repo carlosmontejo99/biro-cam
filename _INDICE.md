@@ -168,3 +168,10 @@ _Última actualización: 2026-08-13 — B.I.O.R. Cam v2.11.0_
 - Sin dependencias nuevas (usa `cv2.QRCodeDetector` + numpy ya bundleados);
   AppImage reconstruido en aarch64 y regenerado en x86_64 por GitHub Actions al
   pushear el tag `v2.11.0`.
+- **Corrección QR + fluidez (13-ago):** el preview de QR/Escáner ahora baja a
+  720p por filtro `vf scale` de mpv (sin reiniciar el stream), pasando de ~2-4 a
+  ~10 fps; al capturar un documento, el `vf` se retira un instante para guardar
+  el enderezado a resolución completa. La detección QR es multiescala
+  (`INTER_AREA`) y corrige el chequeo de puntos `pts.shape[1]>=4` que impedía
+  aceptar QRs decodificados; si el detector ve patrones sin decodificar, el
+  banner guía: «aleja o centra un poco el código».

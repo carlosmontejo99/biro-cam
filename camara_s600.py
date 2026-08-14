@@ -800,6 +800,7 @@ class ScanEngine(QObject):
 
     frame_ready = Signal(object)     # frame BGR anotado (reducido) para preview
     qr_decoded = Signal(str)         # contenido de un QR recién detectado
+    qr_candidate = Signal(bool)      # hay patrones de QR visibles sin decodificar
     page_detected = Signal(bool)     # hay página visible en el frame
     status = Signal(str)
 
@@ -834,7 +835,7 @@ class ScanEngine(QObject):
                 os.unlink(path)
             except FileNotFoundError:
                 pass
-        self._timer.start(150)       # ~6-7 fps: suficiente para alinear sin cargar CPU
+        self._timer.start(100)       # ~10 fps con preview a 720p (fluido y ligero)
 
     def stop(self):
         self.active = False
@@ -877,37 +878,82 @@ class ScanEngine(QObject):
         if reply.get("error") != "success":
             self.status.emit("El visor no responde")
             return
-        frame = cv2.imread(path)
+        frame = self._read_frame(path)
         if frame is None:
-            self.status.emit("Captura inválida")
             return
         self._last_full = frame
 
         # Reducir solo para el análisis (CPU bajo) manteniendo la relación de aspecto.
         fh, fw = frame.shape[:2]
         scale = min(1.0, self.MAX_DETECT_W / max(fw, fh))
-        small = frame if scale == 1.0 else cv2.resize(frame, (int(fw * scale), int(fh * scale)))
+        small = frame if scale == 1.0 else cv2.resize(
+            frame, (int(fw * scale), int(fh * scale)), interpolation=cv2.INTER_AREA)
 
         if self.mode == "qr":
             self._detect_qr(small, scale)
         else:
             self._detect_page(small, scale)
 
+    def _read_frame(self, path, retries=2):
+        """Lee el JPEG de mpv tolerando la escritura asíncrona (descarta truncados)."""
+        for _ in range(retries):
+            frame = cv2.imread(path)
+            if frame is not None:
+                return frame
+            time.sleep(0.08)
+        self.status.emit("Captura inválida")
+        return None
+
+    def capture_once(self):
+        """Fuerza una captura síncrona (para el documento a resolución completa)."""
+        saved = self.capturing
+        self.capturing = True
+        try:
+            self._process_inner()
+        finally:
+            self.capturing = saved
+
+    def capture_full_res(self):
+        """Captura hasta obtener un frame a resolución completa (sin el vf scale)."""
+        for _ in range(3):
+            self.capture_once()
+            fw = 0 if self._last_full is None else self._last_full.shape[1]
+            if fw > 1600:                     # ya es al menos 1080p
+                return self._last_full
+            time.sleep(0.15)
+        return self._last_full
+
     # ---- detección QR ----
+    QR_SCALES = (1.0, 0.75, 0.5, 0.35, 0.25, 0.18, 0.12)
+
     def _detect_qr(self, small, scale):
-        data, pts, _ = self._qr_detector.detectAndDecode(small)
+        """Multiescala: el detector clásico falla si el QR ocupa casi todo el cuadro."""
         display = small.copy()
-        if data and pts is not None and len(pts) >= 4:
-            pts_i = pts.astype(int)
+        sh, sw = small.shape[:2]
+        data, pts, f_ok = "", None, 1.0
+        candidate = False
+        for f in self.QR_SCALES:
+            probe = small if f == 1.0 else cv2.resize(
+                small, (int(sw * f), int(sh * f)), interpolation=cv2.INTER_AREA)
+            d, p, _ = self._qr_detector.detectAndDecode(probe)
+            if d:
+                data, pts, f_ok = d, p, f
+                break
+            if p is not None and p.shape[1] >= 4:
+                candidate = True
+        if data and pts is not None and pts.shape[1] >= 4:
+            pts_disp = (pts[0].astype(float) / f_ok)      # coords del preview
+            pts_i = pts_disp.astype(int)
             cv2.polylines(display, [pts_i], True, (94, 197, 34), 3, cv2.LINE_AA)
             cv2.putText(display, "QR", (pts_i[0][0], pts_i[0][1] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (94, 197, 34), 2, cv2.LINE_AA)
-            self._last_qr_pts = (pts.astype(float) / scale).astype(int)
+            self._last_qr_pts = (pts_disp / scale).astype(int)   # coords del frame completo
             if data != self._last_qr:
                 self._last_qr = data
                 self.qr_decoded.emit(data)
         else:
             self._last_qr_pts = None
+        self.qr_candidate.emit(candidate)
         self.frame_ready.emit(display)
 
     # ---- detección de página (documento) ----
@@ -1671,13 +1717,16 @@ class Panel(QMainWindow):
         # ---- Motor de escaneo QR / Escáner ----------------------------------
         self.scan_active = False
         self.scan_mode = None
+        self._scan_scale = False
         self._scan_warped = None
         self._scan_result = None
         self._scan_page_found = False
         self._scan_qr_data = ""
+        self._scan_last_candidate = None
         self.scan_engine = ScanEngine(self)
         self.scan_engine.frame_ready.connect(self._scan_frame_cb)
         self.scan_engine.qr_decoded.connect(self._scan_on_qr)
+        self.scan_engine.qr_candidate.connect(self._scan_on_candidate)
         self.scan_engine.page_detected.connect(self._scan_on_page)
         self.scan_engine.status.connect(self._flash)
         self.sec_npu_check.setText(
@@ -2190,6 +2239,10 @@ class Panel(QMainWindow):
 
     def _vf_chain(self, with_grid=True):
         parts = []
+        if getattr(self, "_scan_scale", False):
+            # Durante QR/Escáner: preview ligero a 720p (capturas rápidas y fluidas).
+            # Se elimina al capturar el documento para obtener resolución completa.
+            parts.append("scale=1280:720:flags=area")
         if self.mirror:
             parts.append("hflip")
         if self.effect:
@@ -3138,6 +3191,7 @@ class Panel(QMainWindow):
         self._scan_result = None
         self._scan_page_found = False
         self._scan_qr_data = ""
+        self._scan_last_candidate = None
         vw, vh = self.video.width(), self.video.height()
         self.scan_label.setGeometry(0, 0, vw, vh)
         self.scan_label.show()
@@ -3149,6 +3203,9 @@ class Panel(QMainWindow):
             getattr(self, name).setEnabled(False)
         self.scan_panel.show()
         self._scan_show_live(mode)
+        # Preview a 720p por filtro vf: capturas rápidas -> movimiento fluido
+        self._scan_scale = True
+        self._apply_vf()
         self.scan_engine.start(mode)
         self._flash("📱 Modo QR" if mode == "qr" else "📄 Modo Escáner")
 
@@ -3162,6 +3219,9 @@ class Panel(QMainWindow):
         self.scan_banner.hide()
         self.scan_panel.hide()
         self._reset_scan_buttons()
+        # Restaurar la resolución completa del visor
+        self._scan_scale = False
+        self._apply_vf()
         for name in self.SCAN_LOCKED:
             getattr(self, name).setEnabled(True)
         self._flash("Modo escaneo desactivado")
@@ -3226,6 +3286,18 @@ class Panel(QMainWindow):
     def _is_url(data):
         return bool(re.match(r"^(https?://|www\.)[^\s]+$", data, re.IGNORECASE))
 
+    def _scan_on_candidate(self, found):
+        """Guía en vivo: hay un QR casi en foco pero sin decodificar aún."""
+        if not self.scan_active or self.scan_mode != "qr":
+            return
+        if self._scan_qr_data or found == self._scan_last_candidate:
+            return
+        self._scan_last_candidate = found
+        if found:
+            self._set_scan_banner("QR detectado — aleja o centra un poco el código")
+        else:
+            self._set_scan_banner("Apunta a un código QR…")
+
     def _scan_on_page(self, found):
         if not self.scan_active or self.scan_mode != "scan":
             return
@@ -3245,12 +3317,31 @@ class Panel(QMainWindow):
     def _scan_capture_page(self):
         if not self.scan_active or self.scan_mode != "scan":
             return
-        warped = self.scan_engine.capture_page()
+        self.scan_engine.pause()
+        self.scan_capture_btn.setEnabled(False)
+        self.scan_status.setText("Capturando a resolución completa…")
+        # Subir a resolución completa solo para el documento final (sin reiniciar el stream)
+        self._scan_scale = False
+        self._apply_vf()
+        QTimer.singleShot(650, self._scan_do_capture)
+
+    def _scan_do_capture(self):
+        if not self.scan_active or self.scan_mode != "scan":
+            self._restore_scan_scale()
+            return
+        try:
+            self.scan_engine.capture_full_res()
+            warped = self.scan_engine.capture_page()
+        finally:
+            self._restore_scan_scale()
+            self.scan_engine.pause()   # congelar el preview en el resultado
         if warped is None:
             self._flash("⚠ No se detectó ninguna página")
+            self.scan_status.setText("Buscando el borde del documento…")
+            self.scan_capture_btn.setEnabled(False)
+            self.scan_engine.resume()
             return
         self._scan_warped = warped
-        self.scan_engine.pause()          # congelar la detección en vivo
         self._play_shutter()
         self.scan_capture_btn.setVisible(False)
         for b in (self.scan_bw_combo, self.scan_save_doc_btn,
@@ -3260,6 +3351,10 @@ class Panel(QMainWindow):
         self._scan_preview_result()
         self._set_scan_banner("Vista previa del escaneo — revisa y guarda")
         self.scan_status.setText("✓ Documento enderezado.\nRevisa el resultado y guárdalo.")
+
+    def _restore_scan_scale(self):
+        self._scan_scale = True
+        self._apply_vf()
 
     def _scan_preview_result(self):
         if self._scan_warped is None:
