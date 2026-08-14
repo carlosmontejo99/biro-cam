@@ -118,19 +118,30 @@ def _mpv_candidates():
                                                  "ld-linux*.so*"))
                           + glob.glob(os.path.join(rt_dir, "lib",
                                                    "ld-linux*.so*")))
-                # Extensión GL del runtime (Mesa/llvmpipe por defecto, o el
-                # driver NVIDIA si está instalada la extensión correspondiente).
-                gl_ext = (glob.glob("/var/lib/flatpak/runtime/"
-                                    "org.freedesktop.Platform.GL.*/*/*/active/files")
-                          + glob.glob("/var/lib/flatpak/runtime/"
-                                      "org.freedesktop.Platform.GL.*/*/active/files")
-                          + glob.glob(os.path.expanduser(
-                              "~/.local/share/flatpak/runtime/"
-                              "org.freedesktop.Platform.GL.*/*/*/active/files"))
-                          + glob.glob(os.path.expanduser(
-                              "~/.local/share/flatpak/runtime/"
-                              "org.freedesktop.Platform.GL.*/*/active/files")))
+                # Extensión GL del runtime. Preferir el driver real del hardware
+                # (org.freedesktop.Platform.GL.nvidia-*) sobre el software
+                # Mesa/llvmpipe (GL.default) para que el render sea fluido.
+                def _sort_gl(path):
+                    n = path.lower()
+                    return 0 if "nvidia" in n else 1
+
+                gl_ext = sorted(
+                    (glob.glob("/var/lib/flatpak/runtime/"
+                               "org.freedesktop.Platform.GL.*/*/*/active/files")
+                     + glob.glob("/var/lib/flatpak/runtime/"
+                                 "org.freedesktop.Platform.GL.*/*/active/files")
+                     + glob.glob(os.path.expanduser(
+                         "~/.local/share/flatpak/runtime/"
+                         "org.freedesktop.Platform.GL.*/*/*/active/files"))
+                     + glob.glob(os.path.expanduser(
+                         "~/.local/share/flatpak/runtime/"
+                         "org.freedesktop.Platform.GL.*/*/active/files"))),
+                    key=_sort_gl)
                 gl_dir = gl_ext[0] if gl_ext else None
+                # Con driver real (NVIDIA) usamos Vulkan X11: es el backend que
+                # sí inicializa en el runtime (EGL falla). Con llvmpipe usamos
+                # x11egl + software. Un setenv extra controla el modo.
+                gl_hw = bool(gl_dir and "nvidia" in gl_dir.lower())
                 bwrap = shutil.which("bwrap") or "/usr/bin/bwrap"
                 if loader and os.access(bwrap, os.X_OK):
                     home = os.path.expanduser("~")
@@ -159,10 +170,19 @@ def _mpv_candidates():
                          "/usr/lib/x86_64-linux-gnu" if gl_dir else
                          "/app/lib:/usr/lib/x86_64-linux-gnu"),
                         "--setenv", "EGL_PLATFORM", "x11",
-                        "--setenv", "LIBGL_ALWAYS_SOFTWARE", "1",
                     ]
-                    if gl_dir:
+                    if gl_hw:
+                        # Driver NVIDIA: Vulkan por hardware, sin forzar software.
                         cmd += [
+                            "--setenv", "VK_ICD_FILENAMES",
+                            "/usr/lib/x86_64-linux-gnu/GL/vulkan/icd.d/"
+                            "nvidia_icd.json",
+                            "--setenv", "VK_LAYER_PATH",
+                            "/usr/lib/x86_64-linux-gnu/GL/vulkan/implicit_layer.d",
+                        ]
+                    else:
+                        cmd += [
+                            "--setenv", "LIBGL_ALWAYS_SOFTWARE", "1",
                             "--setenv", "__EGL_VENDOR_LIBRARY_DIRS",
                             "/usr/lib/x86_64-linux-gnu/GL/glvnd/egl_vendor.d",
                             "--setenv", "EGL_VENDOR_DIRS",
@@ -204,9 +224,20 @@ def mpv_base_cmd():
 
 
 def mpv_gpu_context():
-    """Elige el contexto GPU que soporta el mpv seleccionado (x11egl o x11);
-    si no expone ninguno, devuelve 'auto' para que mpv decida por sí mismo."""
+    """Elige el contexto GPU del mpv seleccionado.
+
+    Si el candidato es el flatpak con driver NVIDIA (hardware) se usa x11vk
+    (Vulkan X11, el único que inicializa con el runtime 25.08 + NVIDIA; EGL
+    falla). Con llvmpipe/embebido se usa x11egl o x11. Si no hay ninguno,
+    devuelve 'auto'."""
     base = mpv_base_cmd()
+    is_hw = False
+    for tok in base:
+        if "Platform.GL" in tok and "nvidia" in tok.lower():
+            is_hw = True
+            break
+    if is_hw:
+        return "x11vk"
     try:
         out = subprocess.run(base + ["--gpu-context=help"],
                              capture_output=True, text=True, timeout=8,
